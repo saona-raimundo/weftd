@@ -1,0 +1,42 @@
+model = "/home/user/.local/share/models/example-model.gguf"
+prompt_structure = "chatml"        # or "mistral_v7_tekken"
+ctx_size = 8192
+recent_turns = 5
+kv_cache = true
+log_metrics = false
+
+[sampler]
+temperature = 1.0
+min_p = 0.05
+max_tokens = 300
+
+[[wrapper]]
+position = "start"
+content = "You are a collaborative fiction writer. Write vivid, restrained prose."
+
+[[wrapper]]
+position = "end"
+content = "Two to four paragraphs. Stay in character."
+
+[[memory]]
+pool = "context"
+content = "The market in Mossford is run by Pip, who knows everyone's secrets."
+keywords = ["Mossford", "Pip", "market"]
+priority = 2.0
+
+[retrieval.context]
+max_results = 3
+keyword_weight = 0.5
+content_weight = 0.5
+
+[[cue]]
+label = "Raise stakes"
+content = "Something goes wrong in this scene. Don't resolve it."
+
+[[message]]
+role = "system"
+content = "The tavern door creaks open. Rain hammers the cobblestones outside."
+
+[[message]]
+role = "assistant"
+content = "A figure steps through, rain dripping from a heavy cloak."
