@@ -9,6 +9,6 @@ Also, we try to adhere to the [Conventional Commits specification](https://www.c
 ## Unreleased
 
 
-## [0.1.0] - 2026-09-23
+## [0.1.0] - 2026-09-24
 
 - First working version
