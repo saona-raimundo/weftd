@@ -202,7 +202,7 @@ A minimal config:
 
 ```toml
 model = "/home/user/.local/share/models/example-model.gguf"
-prompt_structure = "chatml"        # or "mistral_v7_tekken"
+prompt_structure = "chat_m_l"        # or "mistral_v7_tekken"
 ctx_size = 8192
 recent_turns = 5
 kv_cache = true

@@ -21,6 +21,7 @@ pub enum Position {
 pub enum PromptStructure {
     /// System messages anywhere. <|im_start|>/<|im_end|> tokens.
     /// Qwen, Mag-Mell, etc.
+    #[serde(rename = "chatml", alias = "chat_m_l")]
     ChatML,
     /// Single [SYSTEM_PROMPT] block. Strict [INST]/[/INST] alternation.
     /// Magidonia, Cydonia, Magistral.
@@ -269,15 +270,15 @@ pub struct ModelConfig {
     pub retrieval: HashMap<String, RetrievalConfig>,
 
     // Wrappers
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wrapper: Vec<Wrapper>,
 
     // Memory
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub memory: Vec<Memory>,
 
     // Conversation history
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub message: Vec<Message>,
 
     // Runtime state
@@ -285,11 +286,11 @@ pub struct ModelConfig {
     pub summary: SummaryState,
 
     // Active whispers
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub whisper: Vec<Whisper>,
 
     // Cues
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cue: Vec<Cue>,
 }
 
