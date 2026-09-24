@@ -1,8 +1,10 @@
-model = "/home/user/.local/share/models/example-model.gguf"
+# EDIT THIS: absolute path to any GGUF on your machine.
+# Any ChatML-format model works; try a 7B–12B instruct quant.
+model = "/path/to/your-model.gguf"
 prompt_structure = "chatml"        # or "mistral_v7_tekken"
 ctx_size = 8192
 recent_turns = 5
-kv_cache = true
+kv_cache = false
 log_metrics = false
 
 [sampler]

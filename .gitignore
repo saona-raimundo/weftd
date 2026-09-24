@@ -1,0 +1,8 @@
+/target
+/sessions/
+/debug/
+/kv_cache/
+*.gguf
+models/*.gguf
+server.log
+*.zip

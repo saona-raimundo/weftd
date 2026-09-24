@@ -1,0 +1,65 @@
+<!-- static/index.html -->
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>weftd</title>
+        <link rel="stylesheet" href="/style.css" />
+    </head>
+    <body>
+        <div id="error-banner" onclick="this.classList.remove('visible')"></div>
+        <div
+            id="summary-banner"
+            onclick="this.classList.remove('visible')"
+        ></div>
+        <div id="messages"></div>
+        <div id="whisper-list"></div>
+        <div id="cues"></div>
+        <div id="actions">
+            <button data-cmd="/continue">Continue</button>
+            <button data-prefix="/retry ">Retry</button>
+            <button data-prefix="/system ">System</button>
+            <button data-prefix="/user ">User</button>
+            <button data-prefix="/assistant ">Assistant</button>
+            <button data-prefix="/whisper ">Whisper</button>
+            <button data-cmd="/delete">Delete</button>
+        </div>
+        <div id="editor">
+            <textarea id="input" placeholder="Type a message..."></textarea>
+            <button id="send-btn">Send</button>
+            <div id="debug-hint"></div>
+            <div id="hint">Alt+Enter to send</div>
+        </div>
+        <div id="event-log"></div>
+        <details id="summary-panel">
+            <summary>Summary</summary>
+            <div id="summary-body">
+                <textarea
+                    id="summary-text"
+                    placeholder="No summary yet..."
+                ></textarea>
+                <div id="summary-footer">
+                    <div id="summary-up-to-row">
+                        <label for="summary-up-to">Up to message</label>
+                        <input
+                            type="number"
+                            id="summary-up-to"
+                            min="0"
+                            value="0"
+                        />
+                    </div>
+                    <div id="summary-actions">
+                        <label id="summary-auto-label">
+                            <input type="checkbox" id="summary-auto" />
+                            Automatic
+                        </label>
+                        <button id="summary-gen-btn">Autogenerate</button>
+                    </div>
+                </div>
+            </div>
+        </details>
+        <script src="/app.js"></script>
+    </body>
+</html>

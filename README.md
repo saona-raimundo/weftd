@@ -156,7 +156,7 @@ cargo install --path .
 
 ```sh
 weftd models/demo.toml                   # start from a model config
-weftd sessions/2026-01-15_14-30.toml     # resume a saved session
+weftd sessions/2026-01-15_14-30-28.toml     # resume a saved session
 weftd --dev models/demo.toml             # serve static/ from disk for hot reload
 weftd --no-open models/demo.toml         # skip the browser tab (phone access)
 ```
@@ -278,7 +278,6 @@ Stated plainly so you can decide whether this is usable for you:
 - **WebSocket reconnection** — a browser refresh drops the connection (backend state survives)
 - **Entity/state tracking** — a structured world-state ledger; designed, not built
 - **Generalized task DAG** — retrieval/summary/generation are hardcoded stages
-- **`--list`** — no config enumeration yet
 
 ---
 
