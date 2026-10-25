@@ -2,6 +2,7 @@
 
 use crate::chat::{Conversation, Message, Role};
 use crate::command::Command;
+use crate::config::{Position, Wrapper};
 use crate::whisper::WhisperStack;
 
 use tracing::debug;
@@ -15,7 +16,12 @@ pub enum Effect {
     Multi(Vec<Effect>),
 }
 
-pub fn dispatch(cmd: Command, conv: &mut Conversation, whispers: &mut WhisperStack) -> Effect {
+pub fn dispatch(
+    cmd: Command,
+    conv: &mut Conversation,
+    whispers: &mut WhisperStack,
+    wrappers: &mut [Wrapper],
+) -> Effect {
     match cmd {
         Command::Delete { index } => execute_delete(conv, index),
         Command::Retry { text } => execute_retry(conv, whispers, text),
@@ -26,6 +32,7 @@ pub fn dispatch(cmd: Command, conv: &mut Conversation, whispers: &mut WhisperSta
         Command::Cancel { index } => execute_cancel(whispers, index),
         Command::Continue { text } => execute_continue(whispers, text),
         Command::Sync => execute_sync(),
+        Command::EndWrapperEdit { index, text } => execute_end_wrapper_edit(wrappers, index, text),
     }
 }
 
@@ -137,10 +144,28 @@ fn execute_sync() -> Effect {
     Effect::Multi(vec![Effect::Sync, Effect::WhispersChanged])
 }
 
+/// `index` counts end wrappers only; start wrappers are unreachable by design
+/// (editing them would invalidate the cached KV prefix).
+fn execute_end_wrapper_edit(wrappers: &mut [Wrapper], index: usize, text: String) -> Effect {
+    match wrappers
+        .iter_mut()
+        .filter(|w| matches!(w.position, Position::End))
+        .nth(index)
+    {
+        Some(wrapper) => {
+            debug!("[wrapper end edit {index}] {text}");
+            wrapper.content = text;
+            Effect::Sync
+        }
+        None => Effect::Error(format!("No end wrapper at index {index}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chat::{Conversation, Message, Role};
+    use crate::config::{Position, Wrapper};
     use crate::whisper::WhisperStack;
 
     fn msg(role: Role, content: &str) -> Message {
@@ -148,6 +173,24 @@ mod tests {
             role,
             content: content.to_string(),
         }
+    }
+
+    fn wrapper(position: Position, content: &str, in_summarize: bool) -> Wrapper {
+        Wrapper {
+            position,
+            content: content.to_string(),
+            in_summarize,
+        }
+    }
+
+    /// Interleaved start/end wrappers: end index 0 → slot 1, end index 1 → slot 3.
+    fn mixed_wrappers() -> Vec<Wrapper> {
+        vec![
+            wrapper(Position::Start, "start a", false),
+            wrapper(Position::End, "end a", false),
+            wrapper(Position::Start, "start b", false),
+            wrapper(Position::End, "end b", true),
+        ]
     }
 
     #[test]
@@ -333,13 +376,23 @@ mod tests {
         conv.push(msg(Role::Assistant, "hi"));
 
         // Delete the user message
-        let effect = dispatch(Command::Delete { index: Some(0) }, &mut conv, &mut whispers);
+        let effect = dispatch(
+            Command::Delete { index: Some(0) },
+            &mut conv,
+            &mut whispers,
+            &mut [],
+        );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
         assert_eq!(conv.messages()[0].role, Role::Assistant);
 
         // Retry — pops assistant, no trigger left
-        let effect = dispatch(Command::Retry { text: None }, &mut conv, &mut whispers);
+        let effect = dispatch(
+            Command::Retry { text: None },
+            &mut conv,
+            &mut whispers,
+            &mut [],
+        );
         assert_eq!(conv.messages().len(), 0);
         match effect {
             Effect::Multi(effects) => {
@@ -362,11 +415,17 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
+            &mut [],
         );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert_eq!(whispers.active().len(), 1);
 
-        let effect = dispatch(Command::Cancel { index: 0 }, &mut conv, &mut whispers);
+        let effect = dispatch(
+            Command::Cancel { index: 0 },
+            &mut conv,
+            &mut whispers,
+            &mut [],
+        );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert!(whispers.active().is_empty());
     }
@@ -382,12 +441,18 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
+            &mut [],
         );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
         assert_eq!(conv.messages()[0].role, Role::System);
 
-        let effect = dispatch(Command::Delete { index: Some(0) }, &mut conv, &mut whispers);
+        let effect = dispatch(
+            Command::Delete { index: Some(0) },
+            &mut conv,
+            &mut whispers,
+            &mut [],
+        );
         assert!(matches!(effect, Effect::Sync));
         assert!(conv.messages().is_empty());
     }
@@ -428,5 +493,74 @@ mod tests {
         assert_eq!(conv.messages().len(), 1);
         assert_eq!(conv.messages()[0].role, Role::Assistant);
         assert_eq!(conv.messages()[0].content, "I nod");
+    }
+
+    // --- execute_end_wrapper_edit ---
+
+    #[test]
+    fn end_wrapper_edit_counts_end_wrappers_only() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_edit(&mut wrappers, 1, "new end b".into());
+        assert!(matches!(effect, Effect::Sync));
+        let contents: Vec<_> = wrappers.iter().map(|w| w.content.as_str()).collect();
+        assert_eq!(contents, ["start a", "end a", "start b", "new end b"]);
+    }
+
+    #[test]
+    fn end_wrapper_edit_first() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_edit(&mut wrappers, 0, "new end a".into());
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(wrappers[1].content, "new end a");
+        assert_eq!(wrappers[0].content, "start a");
+    }
+
+    #[test]
+    fn end_wrapper_edit_keeps_position_and_in_summarize() {
+        let mut wrappers = mixed_wrappers();
+        execute_end_wrapper_edit(&mut wrappers, 1, "x".into());
+        assert!(matches!(wrappers[3].position, Position::End));
+        assert!(wrappers[3].in_summarize);
+    }
+
+    #[test]
+    fn end_wrapper_edit_out_of_bounds_is_error_and_unchanged() {
+        let mut wrappers = mixed_wrappers();
+        let before: Vec<_> = wrappers.iter().map(|w| w.content.clone()).collect();
+        let effect = execute_end_wrapper_edit(&mut wrappers, 2, "x".into());
+        assert!(matches!(effect, Effect::Error(_)));
+        let after: Vec<_> = wrappers.iter().map(|w| w.content.clone()).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn end_wrapper_edit_with_only_start_wrappers_is_error() {
+        let mut wrappers = vec![wrapper(Position::Start, "persona", false)];
+        let effect = execute_end_wrapper_edit(&mut wrappers, 0, "x".into());
+        assert!(matches!(effect, Effect::Error(_)));
+        assert_eq!(wrappers[0].content, "persona");
+    }
+
+    #[test]
+    fn dispatch_end_wrapper_edit_leaves_conversation_and_whispers() {
+        let mut conv = Conversation::new();
+        conv.push(msg(Role::User, "hello"));
+        let mut whispers = WhisperStack::default();
+        whispers.add("stay dark".into(), 2);
+        let mut wrappers = mixed_wrappers();
+
+        let effect = dispatch(
+            Command::EndWrapperEdit {
+                index: 0,
+                text: "Two paragraphs.".into(),
+            },
+            &mut conv,
+            &mut whispers,
+            &mut wrappers,
+        );
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(wrappers[1].content, "Two paragraphs.");
+        assert_eq!(conv.messages().len(), 1);
+        assert_eq!(whispers.active().len(), 1);
     }
 }

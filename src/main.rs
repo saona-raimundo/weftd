@@ -19,7 +19,7 @@ mod utils;
 mod whisper;
 
 use crate::chat::{Conversation, SharedConversation, SummaryState};
-use crate::config::ModelConfig;
+use crate::config::{ModelConfig, Wrapper};
 use crate::retrieval::{NamedRetrieval, RetrievalEngine};
 use crate::whisper::WhisperStack;
 
@@ -89,12 +89,14 @@ async fn main() {
     }
     let initial_summary = config.summary.clone();
     let initial_whispers = WhisperStack::from(config.whisper.clone());
+    let initial_wrappers = config.wrapper.clone();
 
     let config = Arc::new(config);
     let llm = Arc::new(client::LlmClient::new(backend_port, &config.model));
     let conversation = Arc::new(Mutex::new(conversation));
     let summary = Arc::new(Mutex::new(initial_summary));
     let whisper_stack = Arc::new(Mutex::new(initial_whispers));
+    let wrappers = Arc::new(Mutex::new(initial_wrappers));
 
     let mut retrieval_pools = Vec::new();
     for (name, pool_config) in &config.retrieval {
@@ -130,6 +132,7 @@ async fn main() {
             let config = config.clone();
             let summary = summary.clone();
             let whisper_stack = whisper_stack.clone();
+            let wrappers = wrappers.clone();
             let retrieval_pools = retrieval_pools.clone();
             let kv_mgr = kv_mgr.clone();
             let summarizing = summarizing.clone();
@@ -141,6 +144,7 @@ async fn main() {
                     config,
                     summary,
                     whisper_stack,
+                    wrappers,
                     retrieval_pools,
                     kv_mgr,
                     summarizing,
@@ -203,6 +207,7 @@ async fn main() {
     let shutdown_conv = conversation.clone();
     let shutdown_summary = summary.clone();
     let shutdown_whispers = whisper_stack.clone();
+    let shutdown_wrappers = wrappers.clone();
     let shutdown_kv_mgr = kv_mgr.clone();
     let shutdown_summarizing = summarizing.clone();
 
@@ -222,6 +227,7 @@ async fn main() {
         &*shutdown_conv.lock().await,
         &*shutdown_summary.lock().await,
         &*shutdown_whispers.lock().await,
+        &shutdown_wrappers.lock().await,
     );
     let save_path = session::save_path();
     match session::save(&snap, &save_path) {
@@ -302,6 +308,7 @@ async fn ws_handler(
     config: Arc<ModelConfig>,
     summary: Arc<Mutex<SummaryState>>,
     whisper_stack: Arc<Mutex<WhisperStack>>,
+    wrappers: Arc<Mutex<Vec<Wrapper>>>,
     retrieval_pools: Arc<Vec<NamedRetrieval>>,
     kv_mgr: Option<Arc<kvcache::KvCacheManager>>,
     summarizing: Arc<AtomicBool>,
@@ -314,6 +321,7 @@ async fn ws_handler(
             config,
             summary,
             whisper_stack,
+            wrappers,
             retrieval_pools,
             kv_mgr,
             summarizing,
@@ -329,6 +337,7 @@ async fn handle_socket(
     config: Arc<ModelConfig>,
     summary: Arc<Mutex<SummaryState>>,
     whisper_stack: Arc<Mutex<WhisperStack>>,
+    wrappers: Arc<Mutex<Vec<Wrapper>>>,
     retrieval_pools: Arc<Vec<NamedRetrieval>>,
     kv_mgr: Option<Arc<kvcache::KvCacheManager>>,
     summarizing: Arc<AtomicBool>,
@@ -340,6 +349,7 @@ async fn handle_socket(
         config,
         summary,
         whisper_stack,
+        wrappers,
         retrieval_pools,
         kv_mgr,
         summarizing,

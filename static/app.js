@@ -33,6 +33,7 @@ let waiting = false;
 let cueEntries = [];
 let activeWhispers = [];
 let summaryState = { text: "", up_to: 0 };
+let endWrappers = [];
 let autoUpdateSummary = false;
 
 let ws = null;
@@ -154,6 +155,8 @@ function handleMessage(e) {
       renderAllMessages();
       summaryState = { text: data.summary.text, up_to: data.summary.up_to };
       renderSummary();
+      endWrappers = data.end_wrappers ?? [];
+      renderEndWrappers();
       if (pendingSubmitId !== null && data.submit_id === pendingSubmitId) {
         clearPending(true);
       }
@@ -393,6 +396,45 @@ function renderSummary() {
   if (upTo && document.activeElement !== upTo) {
     upTo.value = summaryState.up_to;
   }
+}
+
+function renderEndWrappers() {
+  const list = document.getElementById("wrapper-list");
+  const existing = list.querySelectorAll("textarea");
+  // Same count: update in place so a focused textarea keeps its caret.
+  if (existing.length === endWrappers.length && existing.length > 0) {
+    existing.forEach((textarea, i) => {
+      if (document.activeElement !== textarea) {
+        textarea.value = endWrappers[i].content;
+      }
+    });
+    return;
+  }
+  list.innerHTML = "";
+  if (endWrappers.length === 0) {
+    list.innerText = "No end wrappers in this session.";
+    return;
+  }
+  endWrappers.forEach((wrapper, i) => {
+    const textarea = document.createElement("textarea");
+    textarea.className = "wrapper-text";
+    textarea.value = wrapper.content;
+    textarea.addEventListener("blur", () => {
+      const text = textarea.value;
+      if (text === endWrappers[i].content) return;
+      if (text.trim() === "") {
+        textarea.value = endWrappers[i].content;
+        showError("End wrapper can't be empty");
+        return;
+      }
+      send({
+        action: "submit",
+        role: "user",
+        content: `/wrapper end edit ${i} ${text}`,
+      });
+    });
+    list.appendChild(textarea);
+  });
 }
 
 connect();

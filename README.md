@@ -260,6 +260,7 @@ Typed with a `/` prefix, or triggered by UI buttons. Commands travel as ordinary
 | `/retry [text]` | Discard the last response and regenerate; optional text becomes a 1-turn whisper |
 | `/continue [text]` | Generate without a new user message |
 | `/delete [index]` | Remove a message by index, or the last one |
+| `/wrapper end edit <index> <text>` | Replace the text of an end wrapper (index counts end wrappers only); also editable from the *End wrappers* panel |
 
 ---
 

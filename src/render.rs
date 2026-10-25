@@ -419,7 +419,14 @@ recent_turns = 10
         );
         let whispers = vec![sys("Make yourself quieter than usual.")];
 
-        let messages = prompt::build(&config, &history, &summary, &task_outputs, &whispers);
+        let messages = prompt::build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &whispers,
+        );
         let rendered = render(&PromptStructure::MistralV7Tekken, &messages);
 
         // --- Structural assertions ---
@@ -574,7 +581,14 @@ recent_turns = 10
         );
         let whispers = vec![sys("Make yourself quieter than usual.")];
 
-        let messages = prompt::build(&config, &history, &summary, &task_outputs, &whispers);
+        let messages = prompt::build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &whispers,
+        );
         let rendered = render(&PromptStructure::ChatML, &messages);
 
         // Ends with assistant prompt

@@ -34,7 +34,7 @@ This means zero protocol changes for new commands. The backend is the sole autho
 
 Command execution is split into two layers:
 
-**`execute.rs`** contains pure logic. Each command handler (`execute_delete`, `execute_retry`, `execute_system`, `execute_cancel`, etc.) takes `&mut Conversation` and/or `&mut WhisperStack`, performs the mutation, and returns an `Effect` describing what the caller should do. No async, no socket, no LLM — fully unit-testable.
+**`execute.rs`** contains pure logic. Each command handler (`execute_delete`, `execute_retry`, `execute_system`, `execute_cancel`, etc.) takes `&mut Conversation`, `&mut WhisperStack`, and/or the runtime wrapper list, performs the mutation, and returns an `Effect` describing what the caller should do. No async, no socket, no LLM — fully unit-testable.
 
 **`connection.rs`** is the thin async router. It locks the shared state, calls `execute::dispatch()`, drops the locks, then interprets the returned `Effect` by calling `send_sync()`, `generate_turn()`, `send_whispers()`, or `send_error()`.
 
@@ -299,7 +299,7 @@ pure Rust with no inference cost.
 
 ## Session Persistence
 
-The config file is the session file. `ModelConfig` carries everything: hardware settings, wrappers, memories, and runtime state (`message`, `summary`, `whisper`). On shutdown, `session::snapshot()` clones the config and overwrites the runtime fields with current state, then `session::save()` writes it as TOML to `sessions/{timestamp}.toml`.
+The config file is the session file. `ModelConfig` carries everything: hardware settings, wrappers, memories, and runtime state (`message`, `summary`, `whisper`, and `wrapper`, which end-wrapper edits change at runtime). On shutdown, `session::snapshot()` clones the config and overwrites the runtime fields with current state, then `session::save()` writes it as TOML to `sessions/{timestamp}.toml`.
 
 There is no `SessionFile` struct. Loading a saved session is `ModelConfig::load()` — the same function that loads a fresh config. `#[serde(default)]` on `message`, `summary`, and `whisper` means fresh configs without these fields load cleanly.
 

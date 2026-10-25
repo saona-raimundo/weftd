@@ -271,12 +271,14 @@ body {
     margin-top: 0;
 }
 
-#summary-panel {
+#summary-panel,
+#wrapper-panel {
     border-top: 1px solid #333;
     background: #222;
 }
 
-#summary-panel > summary {
+#summary-panel > summary,
+#wrapper-panel > summary {
     padding: 0.5rem 1rem;
     font-size: 0.85rem;
     color: #888;
@@ -285,27 +287,32 @@ body {
     list-style: none;
 }
 
-#summary-panel > summary::before {
+#summary-panel > summary::before,
+#wrapper-panel > summary::before {
     content: "▶ ";
     font-size: 0.7rem;
 }
 
-#summary-panel[open] > summary::before {
+#summary-panel[open] > summary::before,
+#wrapper-panel[open] > summary::before {
     content: "▼ ";
 }
 
-#summary-panel > summary:hover {
+#summary-panel > summary:hover,
+#wrapper-panel > summary:hover {
     color: #ccc;
 }
 
-#summary-body {
+#summary-body,
+#wrapper-list {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
     padding: 0 1rem 0.75rem;
 }
 
-#summary-text {
+#summary-text,
+.wrapper-text {
     width: 100%;
     min-height: 6rem;
     max-height: 20rem;
@@ -320,7 +327,8 @@ body {
     outline: none;
 }
 
-#summary-text:focus {
+#summary-text:focus,
+.wrapper-text:focus {
     border-color: #666;
 }
 

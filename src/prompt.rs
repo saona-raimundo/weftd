@@ -1,12 +1,14 @@
 // src/prompt.rs
 
 use crate::chat::{Message, Role, SummaryState};
-use crate::config::{ModelConfig, Position};
+use crate::config::{ModelConfig, Position, Wrapper};
 
 use std::collections::HashMap;
 
+/// `wrappers` is the live runtime list (editable from the UI), not `config.wrapper`.
 pub fn build(
     config: &ModelConfig,
+    wrappers: &[Wrapper],
     history: &[Message],
     summary: &SummaryState,
     task_outputs: &HashMap<String, Vec<Message>>,
@@ -15,8 +17,7 @@ pub fn build(
     let mut sections: HashMap<String, Vec<Message>> = HashMap::new();
 
     // Start wrappers
-    let start: Vec<Message> = config
-        .wrapper
+    let start: Vec<Message> = wrappers
         .iter()
         .filter(|w| matches!(w.position, Position::Start))
         .map(|w| Message {
@@ -61,8 +62,7 @@ pub fn build(
     }
 
     // End wrappers
-    let end: Vec<Message> = config
-        .wrapper
+    let end: Vec<Message> = wrappers
         .iter()
         .filter(|w| matches!(w.position, Position::End))
         .map(|w| Message {
@@ -160,7 +160,14 @@ recent_turns = 2
             }],
         );
 
-        let prompt = build(&config, &history, &summary, &task_outputs, &[]);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &[],
+        );
 
         let summary_pos = prompt
             .iter()
@@ -193,7 +200,14 @@ recent_turns = 2
         ];
         let summary = "Summary.".to_string().into();
 
-        let with_none = build(&config, &history, &summary, &HashMap::new(), &[]);
+        let with_none = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &HashMap::new(),
+            &[],
+        );
 
         assert!(!with_none.iter().any(|m| m.content.contains("Elena")));
         // Count: summary(1) + all 3 history messages (no cap pre-summary) = 4
@@ -232,7 +246,14 @@ recent_turns = 2
         );
         let whispers = vec![msg(Role::System, "whisper text")];
 
-        let prompt = build(&config, &history, &summary, &task_outputs, &whispers);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &whispers,
+        );
 
         let start_wrapper_pos = prompt
             .iter()
@@ -274,6 +295,7 @@ recent_turns = 2
 
         let prompt = build(
             &config,
+            &config.wrapper,
             &history,
             &("".to_string().into()),
             &HashMap::new(),
@@ -320,7 +342,14 @@ recent_turns = 2
         );
         let whispers = vec![msg(Role::System, "whisper")];
 
-        let prompt = build(&config, &history, &summary, &task_outputs, &whispers);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &whispers,
+        );
 
         let names: Vec<&str> = prompt
             .iter()
@@ -379,7 +408,14 @@ recent_turns = 2
         );
         let whispers = vec![msg(Role::System, "whisper")];
 
-        let prompt = build(&config, &history, &summary, &task_outputs, &whispers);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &whispers,
+        );
 
         let whisper_pos = prompt.iter().position(|m| m.content == "whisper").unwrap();
         let end_pos = prompt.iter().position(|m| m.content == "End.").unwrap();
@@ -396,7 +432,14 @@ recent_turns = 2
         let history = vec![msg(Role::User, "hello")];
         let summary = "".to_string().into();
 
-        let prompt = build(&config, &history, &summary, &HashMap::new(), &[]);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &HashMap::new(),
+            &[],
+        );
 
         // Only the history message should be present
         assert_eq!(prompt.len(), 1);
@@ -426,7 +469,14 @@ recent_turns = 2
             }],
         );
 
-        let prompt = build(&config, &history, &summary, &task_outputs, &[]);
+        let prompt = build(
+            &config,
+            &config.wrapper,
+            &history,
+            &summary,
+            &task_outputs,
+            &[],
+        );
 
         assert!(
             !prompt
@@ -434,5 +484,27 @@ recent_turns = 2
                 .any(|m| m.content.contains("Should be dropped")),
             "memories not in prompt_order should be dropped"
         );
+    }
+
+    #[test]
+    fn build_uses_passed_wrappers_not_config() {
+        let mut config = test_config();
+        config.wrapper = vec![Wrapper {
+            position: Position::End,
+            content: "Stale end wrapper.".to_string(),
+            in_summarize: false,
+        }];
+        let live = vec![Wrapper {
+            position: Position::End,
+            content: "Edited end wrapper.".to_string(),
+            in_summarize: false,
+        }];
+        let history = vec![msg(Role::User, "turn 1")];
+        let summary = "".to_string().into();
+
+        let prompt = build(&config, &live, &history, &summary, &HashMap::new(), &[]);
+
+        assert!(prompt.iter().any(|m| m.content == "Edited end wrapper."));
+        assert!(!prompt.iter().any(|m| m.content == "Stale end wrapper."));
     }
 }

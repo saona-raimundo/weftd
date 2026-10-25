@@ -8,6 +8,8 @@ Also, we try to adhere to the [Conventional Commits specification](https://www.c
 
 ## Unreleased
 
+- feat: edit end wrappers live from the UI (*End wrappers* panel) or with `/wrapper end edit <index> <text>`; edits apply from the next turn, reach summaries, and are saved with the session
+- fix: editing a message at an out-of-range index now reports an error instead of failing silently
 
 ## [0.1.0] - 2026-09-24
 

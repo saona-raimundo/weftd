@@ -3,7 +3,7 @@
 use crate::chat::{self, Message, Role, SharedConversation, SummaryState};
 use crate::client::{self, CompletionResult};
 use crate::command;
-use crate::config::ModelConfig;
+use crate::config::{ModelConfig, Position, Wrapper};
 use crate::execute;
 use crate::kvcache::KvCacheManager;
 use crate::prompt;
@@ -70,6 +70,7 @@ pub struct Connection {
     config: Arc<ModelConfig>,
     summary: Arc<Mutex<SummaryState>>,
     whisper_stack: Arc<Mutex<WhisperStack>>,
+    wrappers: Arc<Mutex<Vec<Wrapper>>>,
     retrievals: Arc<Vec<NamedRetrieval>>,
     kv_cache: Option<Arc<KvCacheManager>>,
     summarizing: Arc<AtomicBool>,
@@ -85,6 +86,7 @@ impl Connection {
         config: Arc<ModelConfig>,
         summary: Arc<Mutex<SummaryState>>,
         whisper_stack: Arc<Mutex<WhisperStack>>,
+        wrappers: Arc<Mutex<Vec<Wrapper>>>,
         retrievals: Arc<Vec<NamedRetrieval>>,
         kv_cache: Option<Arc<KvCacheManager>>,
         summarizing: Arc<AtomicBool>,
@@ -96,6 +98,7 @@ impl Connection {
             config,
             summary,
             whisper_stack,
+            wrappers,
             retrievals,
             kv_cache,
             summarizing,
@@ -128,10 +131,12 @@ impl Connection {
                                 self.generate_turn().await;
                             }
                             command::ParseResult::Command(cmd) => {
+                                // Lock order: conversation → whispers → wrappers.
                                 let effect = {
                                     let mut conv = self.conversation.lock().await;
                                     let mut whispers = self.whisper_stack.lock().await;
-                                    execute::dispatch(cmd, &mut conv, &mut whispers)
+                                    let mut wrappers = self.wrappers.lock().await;
+                                    execute::dispatch(cmd, &mut conv, &mut whispers, &mut wrappers)
                                 };
                                 self.apply(effect).await;
                             }
@@ -146,7 +151,12 @@ impl Connection {
                     }
                     Ok(chat::Action::Edit { index, content }) => {
                         debug!("[edit {index}] {content}");
-                        self.conversation.lock().await.edit(index, content);
+                        let edited = self.conversation.lock().await.edit(index, content);
+                        if !edited {
+                            self.send_error(format!("No message at index {index}"))
+                                .await;
+                        }
+                        // Sync either way so the view drops any rejected edit.
                         self.send_sync().await;
                     }
                     Ok(chat::Action::SummaryEdit { text, up_to }) => {
@@ -177,9 +187,11 @@ impl Connection {
 
         let current_summary = self.summary.lock().await.clone();
         let whisper_messages = self.whisper_stack.lock().await.inject();
+        let wrappers = self.wrappers.lock().await.clone();
 
         let full_prompt = prompt::build(
             &self.config,
+            &wrappers,
             history,
             &current_summary,
             task_outputs,
@@ -357,6 +369,19 @@ impl Connection {
         let summary_text = s.text.clone();
         let summary_up_to = s.up_to;
         drop(s);
+        let end_wrappers: Vec<_> = self
+            .wrappers
+            .lock()
+            .await
+            .iter()
+            .filter(|w| matches!(w.position, Position::End))
+            .map(|w| {
+                json!({
+                    "content": w.content,
+                    "in_summarize": w.in_summarize
+                })
+            })
+            .collect();
         self.send(json!({
             "event": "sync",
             "messages": messages,
@@ -364,6 +389,7 @@ impl Connection {
                 "text": summary_text,
                 "up_to": summary_up_to
             },
+            "end_wrappers": end_wrappers,
             "submit_id": self.last_submit_id
         }))
         .await;
@@ -514,6 +540,7 @@ impl Connection {
 
         let history = self.conversation.lock().await.messages().to_vec();
         let current = self.summary.lock().await.clone();
+        let wrappers = self.wrappers.lock().await.clone();
 
         self.send(json!({ "event": "summarizing" })).await;
         self.summarizing.store(true, Ordering::SeqCst);
@@ -536,7 +563,7 @@ impl Connection {
             false
         };
 
-        let result = summary::run(&self.config, &current, &history, &self.llm).await;
+        let result = summary::run(&self.config, &wrappers, &current, &history, &self.llm).await;
 
         // Restore unconditionally — slot 0 is corrupted whether summary succeeded or not.
         if saved && let Some(mgr) = &self.kv_cache {

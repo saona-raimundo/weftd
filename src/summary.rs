@@ -2,7 +2,7 @@
 
 use crate::chat::{Message, Role, SummaryState};
 use crate::client::LlmClient;
-use crate::config::{ModelConfig, Position};
+use crate::config::{ModelConfig, Position, Wrapper};
 use crate::render;
 use crate::warn;
 
@@ -36,6 +36,7 @@ pub fn should_alert(config: &ModelConfig, ratio: f64) -> bool {
 /// returns the new summary text and coverage marker. Caller owns state mutation.
 pub async fn run(
     config: &ModelConfig,
+    wrappers: &[Wrapper],
     current_summary: &SummaryState,
     history: &[Message],
     client: &LlmClient,
@@ -46,7 +47,7 @@ pub async fn run(
 
     debug!("[summarizing...]");
 
-    let prompt = build_prompt(config, current_summary, history);
+    let prompt = build_prompt(config, wrappers, current_summary, history);
     let rendered = render::render(&config.prompt_structure, &prompt);
 
     let result = client.complete(&rendered, &config.sampler).await?;
@@ -60,7 +61,12 @@ pub async fn run(
 }
 
 /// Build the summarization prompt.
-fn build_prompt(config: &ModelConfig, summary: &SummaryState, history: &[Message]) -> Vec<Message> {
+fn build_prompt(
+    config: &ModelConfig,
+    wrappers: &[Wrapper],
+    summary: &SummaryState,
+    history: &[Message],
+) -> Vec<Message> {
     let mut messages = Vec::new();
 
     let content = match &config.summary_config.prompt {
@@ -72,7 +78,7 @@ fn build_prompt(config: &ModelConfig, summary: &SummaryState, history: &[Message
     };
 
     // Start wrappers with in_summarize = true
-    for wrapper in &config.wrapper {
+    for wrapper in wrappers {
         if matches!(wrapper.position, Position::Start) && wrapper.in_summarize {
             messages.push(Message {
                 role: Role::System,
@@ -104,7 +110,7 @@ fn build_prompt(config: &ModelConfig, summary: &SummaryState, history: &[Message
     });
 
     // End wrappers with in_summarize = true
-    for wrapper in &config.wrapper {
+    for wrapper in wrappers {
         if matches!(wrapper.position, Position::End) && wrapper.in_summarize {
             messages.push(Message {
                 role: Role::System,
@@ -137,5 +143,37 @@ mod tests {
     #[test]
     fn prompt_ratio_none_when_zero_ctx() {
         assert_eq!(prompt_ratio(Some(3000), Some(1000), 0), None);
+    }
+
+    #[test]
+    fn build_prompt_uses_passed_wrappers_not_config() {
+        let mut config = ModelConfig::default();
+        config.summary_config.prompt = Some("Summarize.".to_string());
+        config.wrapper = vec![Wrapper {
+            position: Position::End,
+            content: "Stale.".to_string(),
+            in_summarize: true,
+        }];
+        let live = vec![
+            Wrapper {
+                position: Position::End,
+                content: "Edited.".to_string(),
+                in_summarize: true,
+            },
+            Wrapper {
+                position: Position::End,
+                content: "Not for summaries.".to_string(),
+                in_summarize: false,
+            },
+        ];
+        let history = vec![Message {
+            role: Role::User,
+            content: "hello".to_string(),
+        }];
+
+        let prompt = build_prompt(&config, &live, &SummaryState::new(), &history);
+        let contents: Vec<_> = prompt.iter().map(|m| m.content.as_str()).collect();
+
+        assert_eq!(contents, ["hello", "Summarize.", "Edited."]);
     }
 }

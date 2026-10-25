@@ -4,15 +4,37 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Command {
-    Whisper { turns: u32, text: String },
-    Retry { text: Option<String> },
-    Delete { index: Option<usize> },
-    System { text: String },
-    User { text: String },
-    Assistant { text: String },
-    Cancel { index: usize },
-    Continue { text: Option<String> },
+    Whisper {
+        turns: u32,
+        text: String,
+    },
+    Retry {
+        text: Option<String>,
+    },
+    Delete {
+        index: Option<usize>,
+    },
+    System {
+        text: String,
+    },
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    Cancel {
+        index: usize,
+    },
+    Continue {
+        text: Option<String>,
+    },
     Sync,
+    /// Replace the content of the `index`-th end wrapper (0-based, end wrappers only).
+    EndWrapperEdit {
+        index: usize,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -117,8 +139,42 @@ pub fn parse(input: &str) -> ParseResult {
             _ => ParseResult::Unknown(trimmed.to_string()),
         },
         "/sync" => ParseResult::Command(Command::Sync),
+        "/wrapper" => parse_wrapper(trimmed, rest),
         _ => ParseResult::Unknown(trimmed.to_string()),
     }
+}
+
+/// `/wrapper <position> <verb> ...`. Position and verb are case-insensitive.
+/// Only `end edit <n> <text>` exists so far.
+fn parse_wrapper(raw: &str, rest: &str) -> ParseResult {
+    let (position, rest) = split_first(rest);
+    let (verb, rest) = split_first(rest);
+
+    match (
+        position.to_lowercase().as_str(),
+        verb.to_lowercase().as_str(),
+    ) {
+        ("end", "edit") => {
+            let (index, text) = split_first(rest);
+            match index.parse::<usize>() {
+                Ok(index) if !text.is_empty() => ParseResult::Command(Command::EndWrapperEdit {
+                    index,
+                    text: text.to_string(),
+                }),
+                _ => ParseResult::Unknown(raw.to_string()),
+            }
+        }
+        _ => ParseResult::Unknown(raw.to_string()),
+    }
+}
+
+/// Split off the first whitespace-delimited token. The remainder is trimmed
+/// at both ends but keeps its inner whitespace (newlines included).
+fn split_first(s: &str) -> (&str, &str) {
+    let mut parts = s.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or("");
+    let rest = parts.next().map(|s| s.trim()).unwrap_or("");
+    (first, rest)
 }
 
 #[cfg(test)]
@@ -449,6 +505,100 @@ mod tests {
             ParseResult::Command(Command::Assistant {
                 text: "I nod".to_string(),
             })
+        );
+    }
+
+    // --- /wrapper ---
+
+    #[test]
+    fn wrapper_end_edit() {
+        assert_eq!(
+            parse("/wrapper end edit 1 Keep it short."),
+            ParseResult::Command(Command::EndWrapperEdit {
+                index: 1,
+                text: "Keep it short.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_edit_keeps_inner_newlines() {
+        assert_eq!(
+            parse("/wrapper end edit 0 Line one.\n\nLine two.\n"),
+            ParseResult::Command(Command::EndWrapperEdit {
+                index: 0,
+                text: "Line one.\n\nLine two.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_edit_text_may_start_on_next_line() {
+        assert_eq!(
+            parse("/wrapper end edit 0\nOn its own line."),
+            ParseResult::Command(Command::EndWrapperEdit {
+                index: 0,
+                text: "On its own line.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_case_insensitive() {
+        assert_eq!(
+            parse("/Wrapper END Edit 2 Stay in character."),
+            ParseResult::Command(Command::EndWrapperEdit {
+                index: 2,
+                text: "Stay in character.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_edit_no_text_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end edit 0"),
+            ParseResult::Unknown("/wrapper end edit 0".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_edit_non_numeric_index_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end edit x Keep it short."),
+            ParseResult::Unknown("/wrapper end edit x Keep it short.".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_edit_no_index_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end edit"),
+            ParseResult::Unknown("/wrapper end edit".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_start_is_unknown() {
+        assert_eq!(
+            parse("/wrapper start edit 0 New persona."),
+            ParseResult::Unknown("/wrapper start edit 0 New persona.".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_unknown_verb_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end frob 0 x"),
+            ParseResult::Unknown("/wrapper end frob 0 x".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_bare_is_unknown() {
+        assert_eq!(
+            parse("/wrapper"),
+            ParseResult::Unknown("/wrapper".to_string())
         );
     }
 }

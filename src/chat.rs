@@ -66,9 +66,14 @@ impl Conversation {
         self.messages.push(message);
     }
 
-    pub fn edit(&mut self, index: usize, content: String) {
-        if let Some(msg) = self.messages.get_mut(index) {
-            msg.content = content;
+    /// Replace the content at index. Returns false (unchanged) if out of bounds.
+    pub fn edit(&mut self, index: usize, content: String) -> bool {
+        match self.messages.get_mut(index) {
+            Some(msg) => {
+                msg.content = content;
+                true
+            }
+            None => false,
         }
     }
 
@@ -167,6 +172,23 @@ mod tests {
     fn remove_empty_returns_none() {
         let mut conv = Conversation::new();
         assert!(conv.remove(0).is_none());
+    }
+
+    #[test]
+    fn edit_valid_index() {
+        let mut conv = Conversation::new();
+        conv.push(msg(Role::User, "a"));
+        assert!(conv.edit(0, "b".into()));
+        assert_eq!(conv.messages()[0].content, "b");
+    }
+
+    #[test]
+    fn edit_out_of_bounds_is_unchanged() {
+        let mut conv = Conversation::new();
+        conv.push(msg(Role::User, "a"));
+        assert!(!conv.edit(3, "b".into()));
+        assert_eq!(conv.messages().len(), 1);
+        assert_eq!(conv.messages()[0].content, "a");
     }
 
     #[test]
