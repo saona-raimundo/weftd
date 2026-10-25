@@ -2,7 +2,7 @@
 
 use crate::chat::{Message, Role, SummaryState};
 use crate::client::LlmClient;
-use crate::config::{ModelConfig, Position, Wrapper};
+use crate::config::{LiveSettings, ModelConfig, Position, Wrapper};
 use crate::render;
 use crate::warn;
 
@@ -36,7 +36,7 @@ pub fn should_alert(config: &ModelConfig, ratio: f64) -> bool {
 /// returns the new summary text and coverage marker. Caller owns state mutation.
 pub async fn run(
     config: &ModelConfig,
-    wrappers: &[Wrapper],
+    live: &LiveSettings,
     current_summary: &SummaryState,
     history: &[Message],
     client: &LlmClient,
@@ -47,10 +47,10 @@ pub async fn run(
 
     debug!("[summarizing...]");
 
-    let prompt = build_prompt(config, wrappers, current_summary, history);
+    let prompt = build_prompt(config, &live.wrappers, current_summary, history);
     let rendered = render::render(&config.prompt_structure, &prompt);
 
-    let result = client.complete(&rendered, &config.sampler).await?;
+    let result = client.complete(&rendered, &live.sampler).await?;
     let text = result.text;
     debug!("[summary] {text}");
 

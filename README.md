@@ -74,7 +74,7 @@ prompt_order = ["start_wrappers", "summary", "recent_history", "context", "direc
 
 ### 🎚️ **The full sampler surface**
 
-Temperature, min_p, top_k/top_p, DRY, XTC, explicit sampler ordering, stop sequences. Every field is optional so llama.cpp uses its own defaults.
+Temperature, min_p, top_k/top_p, DRY, XTC, explicit sampler ordering, stop sequences. Every field is optional so llama-server uses its own defaults (from its flags or the model). Every field except `cache_prompt` is also editable live from the *Sampler* panel; changes apply from the next turn, summaries included, and are saved with the session.
 
 ### ⚡ **KV cache persistence**
 
@@ -263,6 +263,8 @@ Typed with a `/` prefix, or triggered by UI buttons. Commands travel as ordinary
 | `/wrapper end edit <index> <text>` | Replace the text of an end wrapper (index counts end wrappers only); also editable from the *End wrappers* panel |
 | `/wrapper end add <index> <text>` | Insert an end wrapper before the one at `index` (`index` = count appends); the panel's *+ Add* button appends |
 | `/wrapper end remove <index>` | Remove an end wrapper; the panel's × button does the same |
+| `/sampler set <key> <json>` | Set a sampler field, e.g. `/sampler set temperature 0.9` or `/sampler set stop ["\n\n"]`; values llama-server would reject or clamp are refused |
+| `/sampler unset <key>` | Clear a sampler field back to the server default |
 
 ---
 

@@ -2,9 +2,12 @@
 
 use crate::chat::{Conversation, Message, Role};
 use crate::command::Command;
-use crate::config::{Position, Wrapper};
+use crate::config::{LiveSettings, Position, SamplerConfig, Wrapper};
 use crate::whisper::WhisperStack;
 
+use serde::de::DeserializeOwned;
+use std::collections::HashSet;
+use std::fmt::Display;
 use tracing::debug;
 
 /// What the caller (Connection) should do after command execution.
@@ -20,7 +23,7 @@ pub fn dispatch(
     cmd: Command,
     conv: &mut Conversation,
     whispers: &mut WhisperStack,
-    wrappers: &mut Vec<Wrapper>,
+    live: &mut LiveSettings,
 ) -> Effect {
     match cmd {
         Command::Delete { index } => execute_delete(conv, index),
@@ -32,9 +35,17 @@ pub fn dispatch(
         Command::Cancel { index } => execute_cancel(whispers, index),
         Command::Continue { text } => execute_continue(whispers, text),
         Command::Sync => execute_sync(),
-        Command::EndWrapperEdit { index, text } => execute_end_wrapper_edit(wrappers, index, text),
-        Command::EndWrapperAdd { index, text } => execute_end_wrapper_add(wrappers, index, text),
-        Command::EndWrapperRemove { index } => execute_end_wrapper_remove(wrappers, index),
+        Command::EndWrapperEdit { index, text } => {
+            execute_end_wrapper_edit(&mut live.wrappers, index, text)
+        }
+        Command::EndWrapperAdd { index, text } => {
+            execute_end_wrapper_add(&mut live.wrappers, index, text)
+        }
+        Command::EndWrapperRemove { index } => {
+            execute_end_wrapper_remove(&mut live.wrappers, index)
+        }
+        Command::SamplerSet { key, value } => execute_sampler(&mut live.sampler, key, Some(value)),
+        Command::SamplerUnset { key } => execute_sampler(&mut live.sampler, key, None),
     }
 }
 
@@ -199,6 +210,112 @@ fn execute_end_wrapper_add(wrappers: &mut Vec<Wrapper>, index: usize, text: Stri
     Effect::Sync
 }
 
+/// Sets (`Some(json)`) or clears (`None`) one sampler field.
+fn execute_sampler(sampler: &mut SamplerConfig, key: String, value: Option<String>) -> Effect {
+    match update_sampler_field(sampler, &key, value.as_deref()) {
+        Ok(()) => {
+            debug!(
+                "[sampler] {key} = {}",
+                value.as_deref().unwrap_or("(default)")
+            );
+            Effect::Sync
+        }
+        // Error first so a typed command stays in the input (the error marks the
+        // submit failed); the sync then resets the panel to the real value.
+        Err(e) => Effect::Multi(vec![Effect::Error(format!("{key}: {e}")), Effect::Sync]),
+    }
+}
+
+/// Validates before assigning, so on `Err` the sampler is unchanged. Ranges
+/// reject what llama-server would reject (HTTP 400) or silently clamp, so the
+/// stored value is the value in effect (except unknown `samplers` names).
+fn update_sampler_field(
+    s: &mut SamplerConfig,
+    key: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    match key {
+        "temperature" => s.temperature = field(value, |v| at_least(v, 0.0))?,
+        "min_p" => s.min_p = field(value, |v| between(v, 0.0, 1.0))?,
+        "top_k" => s.top_k = field(value, |v| at_least(v, 0))?,
+        "top_p" => s.top_p = field(value, |v| between(v, 0.0, 1.0))?,
+        "max_tokens" => s.max_tokens = field(value, |v| at_least(v, -1))?,
+        "repeat_penalty" => s.repeat_penalty = field(value, Ok)?,
+        "repeat_last_n" => s.repeat_last_n = field(value, |v| at_least(v, 0))?,
+        "presence_penalty" => s.presence_penalty = field(value, Ok)?,
+        "frequency_penalty" => s.frequency_penalty = field(value, Ok)?,
+        "dry_multiplier" => s.dry_multiplier = field(value, Ok)?,
+        "dry_base" => s.dry_base = field(value, |v| at_least(v, 1.0))?,
+        "dry_allowed_length" => s.dry_allowed_length = field(value, |v| at_least(v, 0))?,
+        "dry_penalty_last_n" => s.dry_penalty_last_n = field(value, |v| at_least(v, 0))?,
+        "dry_sequence_breakers" => s.dry_sequence_breakers = field(value, sequence_breakers)?,
+        "xtc_probability" => s.xtc_probability = field(value, |v| between(v, 0.0, 1.0))?,
+        "xtc_threshold" => s.xtc_threshold = field(value, |v| between(v, 0.0, 1.0))?,
+        // Names pass through unchecked; llama-server drops unknown ones.
+        "samplers" => s.samplers = field(value, non_empty_strings)?,
+        "seed" => s.seed = field(value, |v| between(v, -1, i64::from(u32::MAX)))?,
+        "stop" => s.stop = field(value, non_empty_strings)?,
+        _ if SamplerConfig::READ_ONLY.contains(&key) => {
+            return Err("read-only here; change it in the TOML".into());
+        }
+        _ => return Err("unknown sampler field".into()),
+    }
+    Ok(())
+}
+
+/// Parses and checks `value`, or yields `None` when unsetting.
+fn field<T: DeserializeOwned>(
+    value: Option<&str>,
+    check: impl Fn(T) -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    value
+        .map(|raw| {
+            if raw.trim() == "null" {
+                return Err("use unset to clear a value".to_string());
+            }
+            serde_json::from_str(raw)
+                .map_err(|e| e.to_string())
+                .and_then(&check)
+        })
+        .transpose()
+}
+
+fn at_least<T: PartialOrd + Display>(v: T, min: T) -> Result<T, String> {
+    if v >= min {
+        Ok(v)
+    } else {
+        Err(format!("must be at least {min}"))
+    }
+}
+
+fn between<T: PartialOrd + Display>(v: T, min: T, max: T) -> Result<T, String> {
+    if min <= v && v <= max {
+        Ok(v)
+    } else {
+        Err(format!("must be between {min} and {max}"))
+    }
+}
+
+/// Lists are cleared with unset, so an empty list is a mistake.
+fn non_empty_strings(list: Vec<String>) -> Result<Vec<String>, String> {
+    if list.is_empty() {
+        return Err("must not be empty; use unset to clear it".into());
+    }
+    if list.iter().any(String::is_empty) {
+        return Err("entries must not be empty".into());
+    }
+    Ok(list)
+}
+
+/// llama-server rejects more than 64 distinct breakers.
+fn sequence_breakers(list: Vec<String>) -> Result<Vec<String>, String> {
+    let list = non_empty_strings(list)?;
+    if list.iter().collect::<HashSet<_>>().len() > 64 {
+        return Err("at most 64 distinct entries".into());
+    }
+    Ok(list)
+}
+
 fn execute_end_wrapper_remove(wrappers: &mut Vec<Wrapper>, index: usize) -> Effect {
     match end_slots(wrappers).get(index) {
         Some(&slot) => {
@@ -214,7 +331,7 @@ fn execute_end_wrapper_remove(wrappers: &mut Vec<Wrapper>, index: usize) -> Effe
 mod tests {
     use super::*;
     use crate::chat::{Conversation, Message, Role};
-    use crate::config::{Position, Wrapper};
+    use crate::config::{LiveSettings, Position, Wrapper};
     use crate::whisper::WhisperStack;
 
     fn msg(role: Role, content: &str) -> Message {
@@ -429,7 +546,7 @@ mod tests {
             Command::Delete { index: Some(0) },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
@@ -440,7 +557,7 @@ mod tests {
             Command::Retry { text: None },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert_eq!(conv.messages().len(), 0);
         match effect {
@@ -464,7 +581,7 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert_eq!(whispers.active().len(), 1);
@@ -473,7 +590,7 @@ mod tests {
             Command::Cancel { index: 0 },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert!(whispers.active().is_empty());
@@ -490,7 +607,7 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
@@ -500,7 +617,7 @@ mod tests {
             Command::Delete { index: Some(0) },
             &mut conv,
             &mut whispers,
-            &mut Vec::new(),
+            &mut LiveSettings::default(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert!(conv.messages().is_empty());
@@ -596,7 +713,10 @@ mod tests {
         conv.push(msg(Role::User, "hello"));
         let mut whispers = WhisperStack::default();
         whispers.add("stay dark".into(), 2);
-        let mut wrappers = mixed_wrappers();
+        let mut live = LiveSettings {
+            wrappers: mixed_wrappers(),
+            ..Default::default()
+        };
 
         let effect = dispatch(
             Command::EndWrapperEdit {
@@ -605,10 +725,10 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
-            &mut wrappers,
+            &mut live,
         );
         assert!(matches!(effect, Effect::Sync));
-        assert_eq!(wrappers[1].content, "Two paragraphs.");
+        assert_eq!(live.wrappers[1].content, "Two paragraphs.");
         assert_eq!(conv.messages().len(), 1);
         assert_eq!(whispers.active().len(), 1);
     }
@@ -710,9 +830,12 @@ mod tests {
     fn dispatch_end_wrapper_add_edit_remove() {
         let mut conv = Conversation::new();
         let mut whispers = WhisperStack::default();
-        let mut wrappers = mixed_wrappers();
+        let mut live = LiveSettings {
+            wrappers: mixed_wrappers(),
+            ..Default::default()
+        };
 
-        let mut run = |cmd| dispatch(cmd, &mut conv, &mut whispers, &mut wrappers);
+        let mut run = |cmd| dispatch(cmd, &mut conv, &mut whispers, &mut live);
         assert!(matches!(
             run(Command::EndWrapperAdd {
                 index: 2,
@@ -733,8 +856,263 @@ mod tests {
         ));
 
         assert_eq!(
-            contents(&wrappers),
+            contents(&live.wrappers),
             ["start a", "start b", "end b", "third, edited"]
         );
+    }
+
+    // --- execute_sampler ---
+
+    fn set(s: &mut SamplerConfig, key: &str, value: &str) -> Effect {
+        execute_sampler(s, key.into(), Some(value.into()))
+    }
+
+    fn is_error_then_sync(effect: &Effect) -> bool {
+        matches!(effect, Effect::Multi(e) if e.len() == 2
+            && matches!(e[0], Effect::Error(_))
+            && matches!(e[1], Effect::Sync))
+    }
+
+    #[test]
+    fn sampler_set_each_value_kind() {
+        let mut s = SamplerConfig::default();
+        assert!(matches!(set(&mut s, "temperature", "0.9"), Effect::Sync));
+        assert!(matches!(set(&mut s, "top_k", "40"), Effect::Sync));
+        assert!(matches!(set(&mut s, "seed", "-1"), Effect::Sync));
+        assert!(matches!(
+            set(&mut s, "stop", r#"["\n\n", "User:"]"#),
+            Effect::Sync
+        ));
+        assert_eq!(s.temperature, Some(0.9));
+        assert_eq!(s.top_k, Some(40));
+        assert_eq!(s.seed, Some(-1));
+        assert_eq!(s.stop, Some(vec!["\n\n".to_string(), "User:".to_string()]));
+    }
+
+    #[test]
+    fn sampler_float_field_accepts_integer_json() {
+        let mut s = SamplerConfig::default();
+        assert!(matches!(set(&mut s, "temperature", "1"), Effect::Sync));
+        assert_eq!(s.temperature, Some(1.0));
+    }
+
+    #[test]
+    fn sampler_unset_clears() {
+        let mut s = SamplerConfig {
+            top_k: Some(40),
+            ..Default::default()
+        };
+        let effect = execute_sampler(&mut s, "top_k".into(), None);
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(s.top_k, None);
+    }
+
+    #[test]
+    fn sampler_accepts_range_boundaries() {
+        let max_seed = u32::MAX.to_string();
+        let ok = [
+            ("temperature", "0"),
+            ("min_p", "0"),
+            ("min_p", "1"),
+            ("top_k", "0"),
+            ("top_p", "1"),
+            ("max_tokens", "-1"),
+            ("repeat_last_n", "0"),
+            ("dry_base", "1"),
+            ("dry_allowed_length", "0"),
+            ("dry_penalty_last_n", "0"),
+            ("xtc_probability", "1"),
+            ("xtc_threshold", "0"),
+            ("seed", max_seed.as_str()),
+            ("repeat_penalty", "-3.5"),
+            ("dry_multiplier", "100"),
+        ];
+        for (key, value) in ok {
+            let mut s = SamplerConfig::default();
+            assert!(
+                matches!(set(&mut s, key, value), Effect::Sync),
+                "{key} = {value} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn sampler_rejects_out_of_range_and_leaves_value() {
+        let too_big_seed = (u64::from(u32::MAX) + 1).to_string();
+        let bad = [
+            ("temperature", "-0.1"),
+            ("min_p", "1.01"),
+            ("min_p", "-0.01"),
+            ("top_k", "-1"),
+            ("top_p", "2"),
+            ("max_tokens", "-2"),
+            ("repeat_last_n", "-1"),
+            ("dry_base", "0.99"),
+            ("dry_allowed_length", "-1"),
+            ("dry_penalty_last_n", "-1"),
+            ("xtc_probability", "1.5"),
+            ("xtc_threshold", "-1"),
+            ("seed", "-2"),
+            ("seed", too_big_seed.as_str()),
+        ];
+        for (key, value) in bad {
+            let mut s = SamplerConfig {
+                temperature: Some(0.7),
+                ..Default::default()
+            };
+            let before = serde_json::to_value(&s).unwrap();
+            let effect = set(&mut s, key, value);
+            assert!(
+                is_error_then_sync(&effect),
+                "{key} = {value} should be rejected"
+            );
+            assert_eq!(serde_json::to_value(&s).unwrap(), before, "{key} changed");
+        }
+    }
+
+    #[test]
+    fn sampler_rejects_wrong_types() {
+        for (key, value) in [
+            ("top_k", "40.0"),
+            ("top_k", "\"40\""),
+            ("temperature", "true"),
+            ("stop", "\"User:\""),
+            ("samplers", "[1]"),
+            ("temperature", "warm"),
+        ] {
+            let mut s = SamplerConfig::default();
+            assert!(
+                is_error_then_sync(&set(&mut s, key, value)),
+                "{key} = {value}"
+            );
+            assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!({}));
+        }
+    }
+
+    #[test]
+    fn sampler_rejects_null_and_points_to_unset() {
+        let mut s = SamplerConfig {
+            top_k: Some(40),
+            ..Default::default()
+        };
+        match set(&mut s, "top_k", "null") {
+            Effect::Multi(e) => match &e[0] {
+                Effect::Error(msg) => assert!(msg.contains("unset"), "{msg}"),
+                _ => panic!("expected Error first"),
+            },
+            _ => panic!("expected Multi"),
+        }
+        assert_eq!(s.top_k, Some(40));
+    }
+
+    #[test]
+    fn sampler_rejects_empty_lists_and_entries() {
+        for (key, value) in [
+            ("stop", "[]"),
+            ("samplers", "[]"),
+            ("dry_sequence_breakers", "[]"),
+            ("stop", r#"["User:", ""]"#),
+        ] {
+            let mut s = SamplerConfig::default();
+            assert!(
+                is_error_then_sync(&set(&mut s, key, value)),
+                "{key} = {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn sampler_names_pass_through_unchecked() {
+        let mut s = SamplerConfig::default();
+        let effect = set(&mut s, "samplers", r#"["penalties", "not_a_sampler"]"#);
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(
+            s.samplers,
+            Some(vec!["penalties".to_string(), "not_a_sampler".to_string()])
+        );
+    }
+
+    #[test]
+    fn sampler_sequence_breakers_limit_counts_distinct() {
+        let distinct: Vec<String> = (0..64).map(|i| format!("b{i}")).collect();
+        let mut with_dupes = distinct.clone();
+        with_dupes.push("b0".to_string());
+        let mut s = SamplerConfig::default();
+        let json = serde_json::to_string(&with_dupes).unwrap();
+        assert!(matches!(
+            set(&mut s, "dry_sequence_breakers", &json),
+            Effect::Sync
+        ));
+
+        let mut too_many = distinct;
+        too_many.push("b64".to_string());
+        let json = serde_json::to_string(&too_many).unwrap();
+        assert!(is_error_then_sync(&set(
+            &mut s,
+            "dry_sequence_breakers",
+            &json
+        )));
+        assert_eq!(s.dry_sequence_breakers.as_ref().map(Vec::len), Some(65));
+    }
+
+    #[test]
+    fn sampler_cache_prompt_is_read_only() {
+        let mut s = SamplerConfig {
+            cache_prompt: Some(true),
+            ..Default::default()
+        };
+        assert!(is_error_then_sync(&set(&mut s, "cache_prompt", "false")));
+        assert!(is_error_then_sync(&execute_sampler(
+            &mut s,
+            "cache_prompt".into(),
+            None
+        )));
+        assert_eq!(s.cache_prompt, Some(true));
+    }
+
+    #[test]
+    fn sampler_unknown_key_is_error() {
+        let mut s = SamplerConfig::default();
+        assert!(is_error_then_sync(&set(&mut s, "temprature", "0.9")));
+        assert!(is_error_then_sync(&execute_sampler(
+            &mut s,
+            "mirostat".into(),
+            None
+        )));
+    }
+
+    #[test]
+    fn sampler_every_editable_field_is_handled() {
+        for key in SamplerConfig::FIELDS {
+            let mut s = SamplerConfig::default();
+            let result = update_sampler_field(&mut s, key, None);
+            if SamplerConfig::READ_ONLY.contains(key) {
+                assert!(result.is_err(), "{key} should be read-only");
+            } else {
+                assert!(result.is_ok(), "{key} is in FIELDS but not handled");
+            }
+        }
+    }
+
+    #[test]
+    fn dispatch_sampler_set_changes_only_sampler() {
+        let mut conv = Conversation::new();
+        let mut whispers = WhisperStack::default();
+        let mut live = LiveSettings {
+            wrappers: mixed_wrappers(),
+            ..Default::default()
+        };
+        let effect = dispatch(
+            Command::SamplerSet {
+                key: "min_p".into(),
+                value: "0.05".into(),
+            },
+            &mut conv,
+            &mut whispers,
+            &mut live,
+        );
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(live.sampler.min_p, Some(0.05));
+        assert_eq!(contents(&live.wrappers), contents(&mixed_wrappers()));
     }
 }

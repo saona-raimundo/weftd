@@ -35,6 +35,7 @@ let activeWhispers = [];
 let summaryState = { text: "", up_to: 0 };
 let endWrappers = [];
 let endWrapperRender = 0;
+let samplerFields = [];
 let autoUpdateSummary = false;
 
 let ws = null;
@@ -159,6 +160,8 @@ function handleMessage(e) {
       renderSummary();
       endWrappers = data.end_wrappers ?? [];
       renderEndWrappers();
+      samplerFields = data.sampler ?? [];
+      renderSampler();
       if (pendingSubmitId !== null && data.submit_id === pendingSubmitId) {
         clearPending(true);
       }
@@ -484,6 +487,62 @@ function renderEndWrappers() {
     item.appendChild(removeBtn);
     item.appendChild(textarea);
     list.appendChild(item);
+  });
+}
+
+// Empty input = unset (server default); otherwise the value is JSON.
+function samplerText(value) {
+  return value === null || value === undefined ? "" : JSON.stringify(value);
+}
+
+function renderSampler() {
+  const list = document.getElementById("sampler-list");
+  // The field set is fixed: build once, then update values in place.
+  if (list.querySelectorAll("input").length !== samplerFields.length) {
+    list.innerHTML = "";
+    samplerFields.forEach((field) => {
+      const input = document.createElement("input");
+      input.className = "sampler-value";
+      input.id = `sampler-${field.key}`;
+      input.dataset.key = field.key;
+      input.placeholder = "server default";
+      // Values are JSON: keep iOS from inserting curly quotes or capitals.
+      input.spellcheck = false;
+      input.autocomplete = "off";
+      input.setAttribute("autocapitalize", "off");
+      input.setAttribute("autocorrect", "off");
+      input.addEventListener("blur", () => onSamplerBlur(input));
+
+      const label = document.createElement("label");
+      label.className = "sampler-key";
+      label.htmlFor = input.id;
+      label.innerText = field.key;
+
+      list.append(label, input);
+    });
+  }
+  list.querySelectorAll("input").forEach((input, i) => {
+    const field = samplerFields[i];
+    input.disabled = !field.editable;
+    input.title = field.editable ? "" : "Read-only here; change it in the TOML";
+    if (document.activeElement !== input) {
+      input.value = samplerText(field.value);
+    }
+  });
+}
+
+function onSamplerBlur(input) {
+  const field = samplerFields.find((f) => f.key === input.dataset.key);
+  if (!field || !field.editable) return;
+  const text = input.value.trim();
+  if (text === samplerText(field.value)) return;
+  send({
+    action: "submit",
+    role: "user",
+    content:
+      text === ""
+        ? `/sampler unset ${field.key}`
+        : `/sampler set ${field.key} ${text}`,
   });
 }
 

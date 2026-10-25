@@ -38,7 +38,8 @@ come from design docs. If any drift from src/, fix this file, don't work around 
 - `src/client.rs` — llama-server HTTP client: native `/completions` (alias of `/completion`), SSE via `reqwest-eventsource`.
 - `src/serve.rs` — spawns `llama-server` as a child in its own process group (`ServeHandle`).
 - `src/kvcache.rs` — slot 0 save/restore via the slot API + `kv_cache/main.meta.toml` fingerprint.
-- `src/config.rs` — `ModelConfig` (config/session TOML schema). `src/session.rs` — snapshot + save.
+- `src/config.rs` — `ModelConfig` (config/session TOML schema); `LiveSettings` (wrappers + sampler,
+  editable at runtime, shared as one `Arc<Mutex<_>>`). `src/session.rs` — snapshot + save.
 - `src/tailscale.rs` — prints the Tailscale URL if available. `src/utils.rs` — timestamps.
 - Unit tests live in `#[cfg(test)]` modules next to the code in most files.
 - `static/` — vanilla JS frontend. No framework, no bundler, no build step.
@@ -101,7 +102,7 @@ slots first; extract the abstraction once the shape is proven.
 
 ## Planned work (context, not instructions)
 Moving offline-only features into the UI, roughly cheapest first:
-- Live sampler editing; live cue editing.
+- Live cue editing.
 - `/remember`: add an entry to a retrieval pool and rebuild that pool's BM25 indices.
 - `/save`: on-demand checkpoint of session (and KV slot).
 - Retrieval pool config; per-turn retrieval visibility in the UI.

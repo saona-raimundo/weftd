@@ -44,6 +44,15 @@ pub enum Command {
     EndWrapperRemove {
         index: usize,
     },
+    /// Set one sampler field; `value` is raw JSON, validated by execute.
+    SamplerSet {
+        key: String,
+        value: String,
+    },
+    /// Clear one sampler field back to the server default.
+    SamplerUnset {
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,6 +158,7 @@ pub fn parse(input: &str) -> ParseResult {
         },
         "/sync" => ParseResult::Command(Command::Sync),
         "/wrapper" => parse_wrapper(trimmed, rest),
+        "/sampler" => parse_sampler(trimmed, rest),
         _ => ParseResult::Unknown(trimmed.to_string()),
     }
 }
@@ -175,6 +185,26 @@ fn parse_wrapper(raw: &str, rest: &str) -> ParseResult {
             Ok(index) => ParseResult::Command(Command::EndWrapperRemove { index }),
             Err(_) => ParseResult::Unknown(raw.to_string()),
         },
+        _ => ParseResult::Unknown(raw.to_string()),
+    }
+}
+
+/// `/sampler set <key> <json>` and `/sampler unset <key>`. Verb and key are
+/// case-insensitive; the JSON value is kept verbatim.
+fn parse_sampler(raw: &str, rest: &str) -> ParseResult {
+    let (verb, rest) = split_first(rest);
+    let (key, value) = split_first(rest);
+    if key.is_empty() {
+        return ParseResult::Unknown(raw.to_string());
+    }
+    let key = key.to_lowercase();
+
+    match verb.to_lowercase().as_str() {
+        "set" if !value.is_empty() => ParseResult::Command(Command::SamplerSet {
+            key,
+            value: value.to_string(),
+        }),
+        "unset" if value.is_empty() => ParseResult::Command(Command::SamplerUnset { key }),
         _ => ParseResult::Unknown(raw.to_string()),
     }
 }
@@ -697,6 +727,87 @@ mod tests {
         assert_eq!(
             parse("/wrapper end remove all"),
             ParseResult::Unknown("/wrapper end remove all".to_string())
+        );
+    }
+
+    // --- /sampler ---
+
+    #[test]
+    fn sampler_set_number() {
+        assert_eq!(
+            parse("/sampler set temperature 0.9"),
+            ParseResult::Command(Command::SamplerSet {
+                key: "temperature".to_string(),
+                value: "0.9".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sampler_set_keeps_json_verbatim() {
+        assert_eq!(
+            parse(r#"/sampler set stop ["\n\n", "User:"]"#),
+            ParseResult::Command(Command::SamplerSet {
+                key: "stop".to_string(),
+                value: r#"["\n\n", "User:"]"#.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sampler_set_does_not_lowercase_value() {
+        assert_eq!(
+            parse(r#"/Sampler SET Samplers ["Top_K", "Temperature"]"#),
+            ParseResult::Command(Command::SamplerSet {
+                key: "samplers".to_string(),
+                value: r#"["Top_K", "Temperature"]"#.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sampler_unset() {
+        assert_eq!(
+            parse("/sampler unset top_k"),
+            ParseResult::Command(Command::SamplerUnset {
+                key: "top_k".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sampler_set_without_value_is_unknown() {
+        assert_eq!(
+            parse("/sampler set temperature"),
+            ParseResult::Unknown("/sampler set temperature".to_string())
+        );
+    }
+
+    #[test]
+    fn sampler_unset_with_value_is_unknown() {
+        assert_eq!(
+            parse("/sampler unset top_k 40"),
+            ParseResult::Unknown("/sampler unset top_k 40".to_string())
+        );
+    }
+
+    #[test]
+    fn sampler_without_key_is_unknown() {
+        assert_eq!(
+            parse("/sampler unset"),
+            ParseResult::Unknown("/sampler unset".to_string())
+        );
+        assert_eq!(
+            parse("/sampler"),
+            ParseResult::Unknown("/sampler".to_string())
+        );
+    }
+
+    #[test]
+    fn sampler_unknown_verb_is_unknown() {
+        assert_eq!(
+            parse("/sampler reset temperature"),
+            ParseResult::Unknown("/sampler reset temperature".to_string())
         );
     }
 }

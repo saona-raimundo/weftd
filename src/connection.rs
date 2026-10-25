@@ -3,7 +3,7 @@
 use crate::chat::{self, Message, Role, SharedConversation, SummaryState};
 use crate::client::{self, CompletionResult};
 use crate::command;
-use crate::config::{ModelConfig, Position, Wrapper};
+use crate::config::{LiveSettings, ModelConfig, Position, SamplerConfig};
 use crate::execute;
 use crate::kvcache::KvCacheManager;
 use crate::prompt;
@@ -70,7 +70,7 @@ pub struct Connection {
     config: Arc<ModelConfig>,
     summary: Arc<Mutex<SummaryState>>,
     whisper_stack: Arc<Mutex<WhisperStack>>,
-    wrappers: Arc<Mutex<Vec<Wrapper>>>,
+    live: Arc<Mutex<LiveSettings>>,
     retrievals: Arc<Vec<NamedRetrieval>>,
     kv_cache: Option<Arc<KvCacheManager>>,
     summarizing: Arc<AtomicBool>,
@@ -86,7 +86,7 @@ impl Connection {
         config: Arc<ModelConfig>,
         summary: Arc<Mutex<SummaryState>>,
         whisper_stack: Arc<Mutex<WhisperStack>>,
-        wrappers: Arc<Mutex<Vec<Wrapper>>>,
+        live: Arc<Mutex<LiveSettings>>,
         retrievals: Arc<Vec<NamedRetrieval>>,
         kv_cache: Option<Arc<KvCacheManager>>,
         summarizing: Arc<AtomicBool>,
@@ -98,7 +98,7 @@ impl Connection {
             config,
             summary,
             whisper_stack,
-            wrappers,
+            live,
             retrievals,
             kv_cache,
             summarizing,
@@ -131,12 +131,12 @@ impl Connection {
                                 self.generate_turn().await;
                             }
                             command::ParseResult::Command(cmd) => {
-                                // Lock order: conversation → whispers → wrappers.
+                                // Lock order: conversation → whispers → live.
                                 let effect = {
                                     let mut conv = self.conversation.lock().await;
                                     let mut whispers = self.whisper_stack.lock().await;
-                                    let mut wrappers = self.wrappers.lock().await;
-                                    execute::dispatch(cmd, &mut conv, &mut whispers, &mut wrappers)
+                                    let mut live = self.live.lock().await;
+                                    execute::dispatch(cmd, &mut conv, &mut whispers, &mut live)
                                 };
                                 self.apply(effect).await;
                             }
@@ -187,19 +187,19 @@ impl Connection {
 
         let current_summary = self.summary.lock().await.clone();
         let whisper_messages = self.whisper_stack.lock().await.inject();
-        let wrappers = self.wrappers.lock().await.clone();
+        // Pinned for this turn; edits (e.g. from another tab) apply next turn.
+        let live = self.live.lock().await.clone();
 
         let full_prompt = prompt::build(
             &self.config,
-            &wrappers,
+            &live.wrappers,
             history,
             &current_summary,
             task_outputs,
             &whisper_messages,
         );
 
-        let config = self.config.clone();
-        let rendered = render::render(&config.prompt_structure, &full_prompt);
+        let rendered = render::render(&self.config.prompt_structure, &full_prompt);
 
         if self.config.log_prompt {
             Self::dump_prompt(&rendered);
@@ -207,9 +207,10 @@ impl Connection {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(16);
         let llm = self.llm.clone();
+        let sampler = live.sampler;
 
         let gen_task =
-            tokio::spawn(async move { llm.complete_stream(&rendered, &config.sampler, tx).await });
+            tokio::spawn(async move { llm.complete_stream(&rendered, &sampler, tx).await });
 
         while let Some(text_so_far) = rx.recv().await {
             self.send(json!({
@@ -369,16 +370,28 @@ impl Connection {
         let summary_text = s.text.clone();
         let summary_up_to = s.up_to;
         drop(s);
-        let end_wrappers: Vec<_> = self
+        let live = self.live.lock().await;
+        let end_wrappers: Vec<_> = live
             .wrappers
-            .lock()
-            .await
             .iter()
             .filter(|w| matches!(w.position, Position::End))
             .map(|w| {
                 json!({
                     "content": w.content,
                     "in_summarize": w.in_summarize
+                })
+            })
+            .collect();
+        // Every field in declaration order; null = unset (server default).
+        let sampler_values = serde_json::to_value(&live.sampler).unwrap_or_default();
+        drop(live);
+        let sampler: Vec<_> = SamplerConfig::FIELDS
+            .iter()
+            .map(|&key| {
+                json!({
+                    "key": key,
+                    "value": sampler_values.get(key),
+                    "editable": !SamplerConfig::READ_ONLY.contains(&key)
                 })
             })
             .collect();
@@ -390,6 +403,7 @@ impl Connection {
                 "up_to": summary_up_to
             },
             "end_wrappers": end_wrappers,
+            "sampler": sampler,
             "submit_id": self.last_submit_id
         }))
         .await;
@@ -540,7 +554,7 @@ impl Connection {
 
         let history = self.conversation.lock().await.messages().to_vec();
         let current = self.summary.lock().await.clone();
-        let wrappers = self.wrappers.lock().await.clone();
+        let live = self.live.lock().await.clone();
 
         self.send(json!({ "event": "summarizing" })).await;
         self.summarizing.store(true, Ordering::SeqCst);
@@ -563,7 +577,7 @@ impl Connection {
             false
         };
 
-        let result = summary::run(&self.config, &wrappers, &current, &history, &self.llm).await;
+        let result = summary::run(&self.config, &live, &current, &history, &self.llm).await;
 
         // Restore unconditionally — slot 0 is corrupted whether summary succeeded or not.
         if saved && let Some(mgr) = &self.kv_cache {

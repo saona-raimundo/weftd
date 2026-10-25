@@ -34,7 +34,7 @@ This means zero protocol changes for new commands. The backend is the sole autho
 
 Command execution is split into two layers:
 
-**`execute.rs`** contains pure logic. Each command handler (`execute_delete`, `execute_retry`, `execute_system`, `execute_cancel`, etc.) takes `&mut Conversation`, `&mut WhisperStack`, and/or the runtime wrapper list, performs the mutation, and returns an `Effect` describing what the caller should do. No async, no socket, no LLM — fully unit-testable.
+**`execute.rs`** contains pure logic. Each command handler (`execute_delete`, `execute_retry`, `execute_system`, `execute_cancel`, etc.) takes `&mut Conversation`, `&mut WhisperStack`, and/or the runtime `LiveSettings` (wrappers + sampler), performs the mutation, and returns an `Effect` describing what the caller should do. No async, no socket, no LLM — fully unit-testable.
 
 **`connection.rs`** is the thin async router. It locks the shared state, calls `execute::dispatch()`, drops the locks, then interprets the returned `Effect` by calling `send_sync()`, `generate_turn()`, `send_whispers()`, or `send_error()`.
 
@@ -151,9 +151,11 @@ The `"token"` event is purely additive. A frontend that doesn't handle it still 
 
 `CompletionRequest` contains `prompt`, `stream`, and a flattened `SamplerConfig`. The `#[serde(flatten)]` attribute inlines all sampler fields into the top-level JSON object, so llama.cpp sees a flat request body rather than a nested `"sampler"` key.
 
-`SamplerConfig` uses `#[serde(skip_serializing_if = "Option::is_none")]` on every field. When serialized to JSON for the request body, `None` fields are omitted entirely — llama.cpp only receives parameters that were explicitly set in the TOML. This same struct deserializes from the `[sampler]` TOML section with `#[serde(default)]` on every field, so an empty or missing `[sampler]` section produces all `None` values.
+`SamplerConfig` uses `#[serde(skip_serializing_if = "Option::is_none")]` on every field. When serialized to JSON for the request body, `None` fields are omitted entirely — llama.cpp only receives parameters that were explicitly set (in the TOML or live). This same struct deserializes from the `[sampler]` TOML section with `#[serde(default)]` on every field, so an empty or missing `[sampler]` section produces all `None` values.
 
 This dual-purpose design means the sampler config flows directly from TOML → struct → JSON request body with no intermediate mapping or builder logic.
+
+At runtime the sampler lives in `LiveSettings` (seeded from the TOML), so `/sampler set|unset` edits apply from the next request. Each set is validated per field: values llama-server would reject (HTTP 400) or silently clamp are refused, so the stored value is the value in effect. The exception is `samplers`: names pass through unchecked, and llama-server drops unknown ones with only a log warning. `cache_prompt` stays read-only live, since `false` forces a full re-prefill every turn.
 
 `CompletionRequest` also carries an `n_predict` field, translated from `SamplerConfig::max_tokens` at construction time. The native `/completion` endpoint uses `n_predict` (not `max_tokens`), so `CompletionRequest::new()` moves the value out of the sampler clone — `max_tokens` serializes as `None` (omitted) while `n_predict` carries the value. The TOML config retains `max_tokens` as the user-facing name.
 
@@ -299,7 +301,7 @@ pure Rust with no inference cost.
 
 ## Session Persistence
 
-The config file is the session file. `ModelConfig` carries everything: hardware settings, wrappers, memories, and runtime state (`message`, `summary`, `whisper`, and `wrapper`, which end-wrapper edits change at runtime). On shutdown, `session::snapshot()` clones the config and overwrites the runtime fields with current state, then `session::save()` writes it as TOML to `sessions/{timestamp}.toml`.
+The config file is the session file. `ModelConfig` carries everything: hardware settings, wrappers, memories, and runtime state (`message`, `summary`, `whisper`, plus `wrapper` and `sampler`, which live edits change at runtime via `LiveSettings`). On shutdown, `session::snapshot()` clones the config and overwrites the runtime fields with current state, then `session::save()` writes it as TOML to `sessions/{timestamp}.toml`.
 
 There is no `SessionFile` struct. Loading a saved session is `ModelConfig::load()` — the same function that loads a fresh config. `#[serde(default)]` on `message`, `summary`, and `whisper` means fresh configs without these fields load cleanly.
 
@@ -361,7 +363,7 @@ Every KV cache operation is best-effort. Restore failures (missing file, fingerp
 The frontend has no authority over state. It renders what `sync` tells it. It sends user input and edits to the backend. That's it.
 
 Event handling:
-- `"sync"` — replaces the entire message list and summary state, re-renders both
+- `"sync"` — replaces the message list, summary state, end wrappers and sampler fields, re-renders all of them
 - `"thinking"` — shows a placeholder (UI-only, doesn't touch messages)
 - `"token"` — progressively updates the thinking placeholder with accumulated text
 - `"error"` — shows error banner (click to dismiss)

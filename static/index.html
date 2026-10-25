@@ -33,9 +33,9 @@
             <div id="hint">Alt+Enter to send</div>
         </div>
         <div id="event-log"></div>
-        <details id="summary-panel">
+        <details id="summary-panel" class="panel">
             <summary>Summary</summary>
-            <div id="summary-body">
+            <div id="summary-body" class="panel-body">
                 <textarea
                     id="summary-text"
                     placeholder="No summary yet..."
@@ -60,11 +60,17 @@
                 </div>
             </div>
         </details>
-        <details id="wrapper-panel">
+        <details id="wrapper-panel" class="panel">
             <summary>End wrappers</summary>
-            <div id="wrapper-body">
+            <div id="wrapper-body" class="panel-body">
                 <div id="wrapper-list"></div>
                 <button id="wrapper-add-btn">+ Add</button>
+            </div>
+        </details>
+        <details id="sampler-panel" class="panel">
+            <summary>Sampler</summary>
+            <div id="sampler-body" class="panel-body">
+                <div id="sampler-list"></div>
             </div>
         </details>
         <script src="/app.js"></script>

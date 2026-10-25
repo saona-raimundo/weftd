@@ -1,7 +1,7 @@
 // src/session.rs
 
 use crate::chat::{Conversation, SummaryState};
-use crate::config::{ModelConfig, Wrapper};
+use crate::config::{LiveSettings, ModelConfig};
 use crate::utils;
 use crate::whisper::WhisperStack;
 
@@ -14,13 +14,14 @@ pub fn snapshot(
     conversation: &Conversation,
     summary: &SummaryState,
     whispers: &WhisperStack,
-    wrappers: &[Wrapper],
+    live: &LiveSettings,
 ) -> ModelConfig {
     let mut snap = config.clone();
     snap.message = conversation.messages().to_vec();
     snap.summary = summary.clone();
     snap.whisper = whispers.active().to_vec();
-    snap.wrapper = wrappers.to_vec();
+    snap.wrapper = live.wrappers.clone();
+    snap.sampler = live.sampler.clone();
     snap
 }
 
@@ -41,10 +42,10 @@ pub fn save_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Position;
+    use crate::config::{Position, Wrapper};
 
     #[test]
-    fn snapshot_writes_live_wrappers_and_round_trips() {
+    fn snapshot_writes_live_settings_and_round_trips() {
         let config = ModelConfig {
             wrapper: vec![
                 Wrapper {
@@ -60,8 +61,10 @@ mod tests {
             ],
             ..Default::default()
         };
-        let mut live = config.wrapper.clone();
-        live[1].content = "Edited.".to_string();
+        let mut live = LiveSettings::from_config(&config);
+        live.wrappers[1].content = "Edited.".to_string();
+        live.sampler.temperature = Some(0.9);
+        live.sampler.stop = Some(vec!["\n\n".to_string(), "User:".to_string()]);
 
         let snap = snapshot(
             &config,
@@ -83,5 +86,11 @@ mod tests {
         assert!(matches!(reloaded.wrapper[1].position, Position::End));
         assert_eq!(reloaded.wrapper[1].content, "Edited.");
         assert!(reloaded.wrapper[1].in_summarize);
+        assert_eq!(config.sampler.temperature, None, "source config untouched");
+        assert_eq!(reloaded.sampler.temperature, Some(0.9));
+        assert_eq!(
+            reloaded.sampler.stop,
+            Some(vec!["\n\n".to_string(), "User:".to_string()])
+        );
     }
 }

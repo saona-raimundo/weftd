@@ -183,6 +183,54 @@ pub struct SamplerConfig {
     pub stop: Option<Vec<String>>,
 }
 
+impl SamplerConfig {
+    /// Every field, in declaration order. Serialized maps sort their keys, so
+    /// this list fixes the order the UI shows. A test keeps it in sync.
+    pub const FIELDS: &[&str] = &[
+        "temperature",
+        "min_p",
+        "top_k",
+        "top_p",
+        "max_tokens",
+        "repeat_penalty",
+        "repeat_last_n",
+        "presence_penalty",
+        "frequency_penalty",
+        "dry_multiplier",
+        "dry_base",
+        "dry_allowed_length",
+        "dry_penalty_last_n",
+        "dry_sequence_breakers",
+        "xtc_probability",
+        "xtc_threshold",
+        "samplers",
+        "cache_prompt",
+        "seed",
+        "stop",
+    ];
+
+    /// Not live-editable: `cache_prompt = false` forces a full re-prefill every
+    /// turn. Still settable in the TOML.
+    pub const READ_ONLY: &[&str] = &["cache_prompt"];
+}
+
+/// Config sections editable at runtime. Seeded from the config at startup;
+/// the shutdown snapshot writes them back into the session file.
+#[derive(Debug, Clone, Default)]
+pub struct LiveSettings {
+    pub wrappers: Vec<Wrapper>,
+    pub sampler: SamplerConfig,
+}
+
+impl LiveSettings {
+    pub fn from_config(config: &ModelConfig) -> Self {
+        Self {
+            wrappers: config.wrapper.clone(),
+            sampler: config.sampler.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cue {
     pub label: String,
@@ -641,5 +689,51 @@ content = "Hey."
         let config: ModelConfig = toml::from_str(toml_str).unwrap();
         let breakers = config.sampler.dry_sequence_breakers.unwrap();
         assert_eq!(breakers, vec!["\n", ":", "\"", "*"]);
+    }
+
+    #[test]
+    fn sampler_fields_match_struct() {
+        // No `..Default::default()`: a new field fails to compile here until
+        // it is added, and then fails the assertion until FIELDS lists it.
+        let full = SamplerConfig {
+            temperature: Some(1.0),
+            min_p: Some(0.1),
+            top_k: Some(40),
+            top_p: Some(0.9),
+            max_tokens: Some(300),
+            repeat_penalty: Some(1.1),
+            repeat_last_n: Some(64),
+            presence_penalty: Some(0.0),
+            frequency_penalty: Some(0.0),
+            dry_multiplier: Some(0.8),
+            dry_base: Some(1.75),
+            dry_allowed_length: Some(2),
+            dry_penalty_last_n: Some(256),
+            dry_sequence_breakers: Some(vec!["\n".to_string()]),
+            xtc_probability: Some(0.0),
+            xtc_threshold: Some(0.1),
+            samplers: Some(vec!["temperature".to_string()]),
+            cache_prompt: Some(true),
+            seed: Some(-1),
+            stop: Some(vec!["User:".to_string()]),
+        };
+        let value = serde_json::to_value(&full).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut fields = SamplerConfig::FIELDS.to_vec();
+        keys.sort_unstable();
+        fields.sort_unstable();
+        assert_eq!(keys, fields);
+    }
+
+    #[test]
+    fn sampler_read_only_fields_exist() {
+        for key in SamplerConfig::READ_ONLY {
+            assert!(SamplerConfig::FIELDS.contains(key), "{key}");
+        }
     }
 }
