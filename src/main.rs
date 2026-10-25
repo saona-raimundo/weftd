@@ -232,12 +232,12 @@ async fn main() {
     // Save KV cache while server is still running.
     // Skip if a summary autogeneration was in flight — slot 0 holds mid-summary
     // garbage, but main.bin already holds the pre-summary good state.
-    if shutdown_config.kv_cache && !shutdown_summarizing.load(Ordering::SeqCst) {
-        if let Some(mgr) = &shutdown_kv_mgr {
-            if let Err(e) = mgr.save(&shutdown_config).await {
-                warn!("KV cache save failed (non-fatal): {e}");
-            }
-        }
+    if shutdown_config.kv_cache
+        && !shutdown_summarizing.load(Ordering::SeqCst)
+        && let Some(mgr) = &shutdown_kv_mgr
+        && let Err(e) = mgr.save(&shutdown_config).await
+    {
+        warn!("KV cache save failed (non-fatal): {e}");
     }
 }
 
@@ -294,6 +294,7 @@ async fn script() -> (axum::http::HeaderMap, &'static str) {
     (headers, include_str!("../static/app.js"))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ws_handler(
     ws: WebSocketUpgrade,
     conversation: SharedConversation,
@@ -320,6 +321,7 @@ async fn ws_handler(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_socket(
     socket: WebSocket,
     conversation: chat::SharedConversation,

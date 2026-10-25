@@ -16,22 +16,17 @@ pub enum Position {
 /// Defines how Vec<Message> is rendered into a raw prompt string.
 /// Each variant handles control tokens and structural constraints
 /// for a model family's chat template.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptStructure {
     /// System messages anywhere. <|im_start|>/<|im_end|> tokens.
     /// Qwen, Mag-Mell, etc.
+    #[default]
     #[serde(rename = "chatml", alias = "chat_m_l")]
     ChatML,
     /// Single [SYSTEM_PROMPT] block. Strict [INST]/[/INST] alternation.
     /// Magidonia, Cydonia, Magistral.
     MistralV7Tekken,
-}
-
-impl Default for PromptStructure {
-    fn default() -> Self {
-        Self::ChatML
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,12 +74,12 @@ pub struct SummaryConfig {
 impl SummaryConfig {
     /// Validate summary config at startup.
     pub fn validate(&self) {
-        if let Some(alert) = self.alert {
-            if !(0.0..=1.0).contains(&alert) {
-                tracing::warn!(
-                    "Summarize alert {alert} is outside [0.0, 1.0] — may never trigger or always trigger"
-                );
-            }
+        if let Some(alert) = self.alert
+            && !(0.0..=1.0).contains(&alert)
+        {
+            tracing::warn!(
+                "Summarize alert {alert} is outside [0.0, 1.0] — may never trigger or always trigger"
+            );
         }
     }
 }

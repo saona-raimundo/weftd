@@ -77,6 +77,7 @@ pub struct Connection {
 }
 
 impl Connection {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         socket: WebSocket,
         conversation: SharedConversation,
@@ -154,6 +155,7 @@ impl Connection {
                         s.up_to = up_to;
                         drop(s);
                         self.send_summary().await;
+                        self.send_sync().await;
                     }
                     Ok(chat::Action::SummaryTrigger) => {
                         self.run_summary().await;
@@ -400,6 +402,7 @@ impl Connection {
                 }
                 execute::Effect::WhispersChanged => {
                     self.send_whispers().await;
+                    self.send_sync().await;
                 }
                 execute::Effect::Error(msg) => {
                     self.send_error(msg).await;
@@ -476,17 +479,16 @@ impl Connection {
             None
         };
 
-        if log_metrics {
-            if let (Some(result), Some(t0), Some(t1), Some(t2), Some(t3)) = (result, t0, t1, t2, t3)
-            {
-                let metrics = TurnMetrics {
-                    retrieval_ms: (t1 - t0).as_secs_f64() * 1000.0,
-                    llm_wall_ms: (t2 - t1).as_secs_f64() * 1000.0,
-                    post_generation_ms: (t3 - t2).as_secs_f64() * 1000.0,
-                    completion: result,
-                };
-                metrics.log();
-            }
+        if log_metrics
+            && let (Some(result), Some(t0), Some(t1), Some(t2), Some(t3)) = (result, t0, t1, t2, t3)
+        {
+            let metrics = TurnMetrics {
+                retrieval_ms: (t1 - t0).as_secs_f64() * 1000.0,
+                llm_wall_ms: (t2 - t1).as_secs_f64() * 1000.0,
+                post_generation_ms: (t3 - t2).as_secs_f64() * 1000.0,
+                completion: result,
+            };
+            metrics.log();
         }
     }
 
@@ -537,13 +539,11 @@ impl Connection {
         let result = summary::run(&self.config, &current, &history, &self.llm).await;
 
         // Restore unconditionally — slot 0 is corrupted whether summary succeeded or not.
-        if saved {
-            if let Some(mgr) = &self.kv_cache {
-                match mgr.restore(&self.config).await {
-                    Ok(true) => {}
-                    Ok(false) => warn!("KV cache restore returned false after summary"),
-                    Err(e) => warn!("KV cache restore failed after summary: {e}"),
-                }
+        if saved && let Some(mgr) = &self.kv_cache {
+            match mgr.restore(&self.config).await {
+                Ok(true) => {}
+                Ok(false) => warn!("KV cache restore returned false after summary"),
+                Err(e) => warn!("KV cache restore failed after summary: {e}"),
             }
         }
 
@@ -553,6 +553,7 @@ impl Connection {
             Ok(new_state) => {
                 *self.summary.lock().await = new_state;
                 self.send_summary().await;
+                self.send_sync().await;
             }
             Err(e) => {
                 self.send_error(format!("Summarization failed: {e}")).await;

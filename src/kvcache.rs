@@ -62,7 +62,7 @@ impl KvCacheManager {
     pub async fn save(&self, config: &ModelConfig) -> anyhow::Result<()> {
         let resp = self
             .client
-            .post(&self.slot_url("save"))
+            .post(self.slot_url("save"))
             .json(&serde_json::json!({ "filename": KV_FILENAME }))
             .send()
             .await?;
@@ -110,7 +110,7 @@ impl KvCacheManager {
 
         match self
             .client
-            .post(&self.slot_url("restore"))
+            .post(self.slot_url("restore"))
             .json(&serde_json::json!({ "filename": KV_FILENAME }))
             .send()
             .await
