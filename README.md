@@ -261,6 +261,8 @@ Typed with a `/` prefix, or triggered by UI buttons. Commands travel as ordinary
 | `/continue [text]` | Generate without a new user message |
 | `/delete [index]` | Remove a message by index, or the last one |
 | `/wrapper end edit <index> <text>` | Replace the text of an end wrapper (index counts end wrappers only); also editable from the *End wrappers* panel |
+| `/wrapper end add <index> <text>` | Insert an end wrapper before the one at `index` (`index` = count appends); the panel's *+ Add* button appends |
+| `/wrapper end remove <index>` | Remove an end wrapper; the panel's × button does the same |
 
 ---
 

@@ -62,7 +62,8 @@ body {
     border-color: #555;
 }
 
-.msg-delete {
+.msg-delete,
+.wrapper-remove {
     position: absolute;
     top: 0.25rem;
     right: 0.25rem;
@@ -76,17 +77,20 @@ body {
     transition: opacity 0.15s;
 }
 
-.message:hover .msg-delete {
+.message:hover .msg-delete,
+.wrapper-item:hover .wrapper-remove {
     opacity: 0.6;
 }
 
-.msg-delete:hover {
+.msg-delete:hover,
+.wrapper-remove:hover {
     color: #ff6666;
     opacity: 1;
 }
 
 @media (max-width: 600px) {
-    .msg-delete {
+    .msg-delete,
+    .wrapper-remove {
         opacity: 0.4;
     }
 }
@@ -304,7 +308,7 @@ body {
 }
 
 #summary-body,
-#wrapper-list {
+#wrapper-body {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -330,6 +334,24 @@ body {
 #summary-text:focus,
 .wrapper-text:focus {
     border-color: #666;
+}
+
+#wrapper-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.wrapper-item {
+    position: relative;
+}
+
+.wrapper-text {
+    padding-right: 1.75rem;
+}
+
+#wrapper-add-btn {
+    align-self: flex-start;
 }
 
 #summary-footer {
@@ -379,7 +401,8 @@ body {
     cursor: pointer;
 }
 
-#summary-gen-btn {
+#summary-gen-btn,
+#wrapper-add-btn {
     background: #2a3a2a;
     color: #ccc;
     border: 1px solid #444;
@@ -390,7 +413,8 @@ body {
     cursor: pointer;
 }
 
-#summary-gen-btn:hover {
+#summary-gen-btn:hover,
+#wrapper-add-btn:hover {
     background: #3a4a3a;
     border-color: #666;
 }

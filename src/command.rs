@@ -35,6 +35,15 @@ pub enum Command {
         index: usize,
         text: String,
     },
+    /// Insert a new end wrapper before the `index`-th one; `index == count` appends.
+    EndWrapperAdd {
+        index: usize,
+        text: String,
+    },
+    /// Remove the `index`-th end wrapper (0-based, end wrappers only).
+    EndWrapperRemove {
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -144,8 +153,8 @@ pub fn parse(input: &str) -> ParseResult {
     }
 }
 
-/// `/wrapper <position> <verb> ...`. Position and verb are case-insensitive.
-/// Only `end edit <n> <text>` exists so far.
+/// `/wrapper end edit|add <n> <text>` and `/wrapper end remove <n>`.
+/// Position and verb are case-insensitive.
 fn parse_wrapper(raw: &str, rest: &str) -> ParseResult {
     let (position, rest) = split_first(rest);
     let (verb, rest) = split_first(rest);
@@ -154,17 +163,28 @@ fn parse_wrapper(raw: &str, rest: &str) -> ParseResult {
         position.to_lowercase().as_str(),
         verb.to_lowercase().as_str(),
     ) {
-        ("end", "edit") => {
-            let (index, text) = split_first(rest);
-            match index.parse::<usize>() {
-                Ok(index) if !text.is_empty() => ParseResult::Command(Command::EndWrapperEdit {
-                    index,
-                    text: text.to_string(),
-                }),
-                _ => ParseResult::Unknown(raw.to_string()),
-            }
-        }
+        ("end", "edit") => match index_and_text(rest) {
+            Some((index, text)) => ParseResult::Command(Command::EndWrapperEdit { index, text }),
+            None => ParseResult::Unknown(raw.to_string()),
+        },
+        ("end", "add") => match index_and_text(rest) {
+            Some((index, text)) => ParseResult::Command(Command::EndWrapperAdd { index, text }),
+            None => ParseResult::Unknown(raw.to_string()),
+        },
+        ("end", "remove") => match rest.parse::<usize>() {
+            Ok(index) => ParseResult::Command(Command::EndWrapperRemove { index }),
+            Err(_) => ParseResult::Unknown(raw.to_string()),
+        },
         _ => ParseResult::Unknown(raw.to_string()),
+    }
+}
+
+/// `<n> <text>` with a non-empty text.
+fn index_and_text(rest: &str) -> Option<(usize, String)> {
+    let (index, text) = split_first(rest);
+    match index.parse::<usize>() {
+        Ok(index) if !text.is_empty() => Some((index, text.to_string())),
+        _ => None,
     }
 }
 
@@ -599,6 +619,84 @@ mod tests {
         assert_eq!(
             parse("/wrapper"),
             ParseResult::Unknown("/wrapper".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_add() {
+        assert_eq!(
+            parse("/wrapper end add 2 No purple prose.\nShow, don't tell."),
+            ParseResult::Command(Command::EndWrapperAdd {
+                index: 2,
+                text: "No purple prose.\nShow, don't tell.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_add_case_insensitive() {
+        assert_eq!(
+            parse("/wrapper End ADD 0 x"),
+            ParseResult::Command(Command::EndWrapperAdd {
+                index: 0,
+                text: "x".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_add_no_text_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end add 0"),
+            ParseResult::Unknown("/wrapper end add 0".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_add_non_numeric_index_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end add last x"),
+            ParseResult::Unknown("/wrapper end add last x".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_remove() {
+        assert_eq!(
+            parse("/wrapper end remove 1"),
+            ParseResult::Command(Command::EndWrapperRemove { index: 1 })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_remove_case_insensitive() {
+        assert_eq!(
+            parse("/WRAPPER end Remove 0"),
+            ParseResult::Command(Command::EndWrapperRemove { index: 0 })
+        );
+    }
+
+    #[test]
+    fn wrapper_end_remove_no_index_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end remove"),
+            ParseResult::Unknown("/wrapper end remove".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_remove_extra_text_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end remove 1 now"),
+            ParseResult::Unknown("/wrapper end remove 1 now".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_end_remove_non_numeric_is_unknown() {
+        assert_eq!(
+            parse("/wrapper end remove all"),
+            ParseResult::Unknown("/wrapper end remove all".to_string())
         );
     }
 }

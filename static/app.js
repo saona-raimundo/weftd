@@ -34,6 +34,7 @@ let cueEntries = [];
 let activeWhispers = [];
 let summaryState = { text: "", up_to: 0 };
 let endWrappers = [];
+let endWrapperRender = 0;
 let autoUpdateSummary = false;
 
 let ws = null;
@@ -120,6 +121,7 @@ function handleMessage(e) {
         "Alt+Enter or Ctrl+Enter to send";
       removePlaceholder();
       showError(data.content);
+      setWrapperControlsDisabled(false);
       if (pendingSubmitId !== null && data.submit_id === pendingSubmitId) {
         clearPending(false);
       }
@@ -309,6 +311,22 @@ document.getElementById("summary-auto").addEventListener("change", (e) => {
   autoUpdateSummary = e.target.checked;
 });
 
+document.getElementById("wrapper-add-btn").addEventListener("click", () => {
+  if (waiting || pendingSubmitId !== null) return;
+  const text = prompt("New end wrapper:");
+  if (text === null) return;
+  if (text.trim() === "") {
+    showError("End wrapper can't be empty");
+    return;
+  }
+  setWrapperControlsDisabled(true);
+  send({
+    action: "submit",
+    role: "user",
+    content: `/wrapper end add ${endWrappers.length} ${text}`,
+  });
+});
+
 function renderAllMessages() {
   messagesEl.innerHTML = "";
   messages.forEach((_, i) => renderMessage(i));
@@ -398,7 +416,16 @@ function renderSummary() {
   }
 }
 
+// Add/remove shift indices, so wrapper controls stay locked from a click
+// until the next sync (or error) reflects it.
+function setWrapperControlsDisabled(disabled) {
+  document
+    .querySelectorAll(".wrapper-remove, #wrapper-add-btn")
+    .forEach((el) => (el.disabled = disabled));
+}
+
 function renderEndWrappers() {
+  setWrapperControlsDisabled(false);
   const list = document.getElementById("wrapper-list");
   const existing = list.querySelectorAll("textarea");
   // Same count: update in place so a focused textarea keeps its caret.
@@ -410,16 +437,22 @@ function renderEndWrappers() {
     });
     return;
   }
+  // A rebuild can blur a focused textarea; its index is stale by then.
+  const render = ++endWrapperRender;
   list.innerHTML = "";
   if (endWrappers.length === 0) {
     list.innerText = "No end wrappers in this session.";
     return;
   }
   endWrappers.forEach((wrapper, i) => {
+    const item = document.createElement("div");
+    item.className = "wrapper-item";
+
     const textarea = document.createElement("textarea");
     textarea.className = "wrapper-text";
     textarea.value = wrapper.content;
     textarea.addEventListener("blur", () => {
+      if (render !== endWrapperRender) return;
       const text = textarea.value;
       if (text === endWrappers[i].content) return;
       if (text.trim() === "") {
@@ -433,7 +466,24 @@ function renderEndWrappers() {
         content: `/wrapper end edit ${i} ${text}`,
       });
     });
-    list.appendChild(textarea);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "wrapper-remove";
+    removeBtn.innerText = "×";
+    removeBtn.title = "Remove end wrapper";
+    removeBtn.addEventListener("click", () => {
+      if (waiting || pendingSubmitId !== null) return;
+      setWrapperControlsDisabled(true);
+      send({
+        action: "submit",
+        role: "user",
+        content: `/wrapper end remove ${i}`,
+      });
+    });
+
+    item.appendChild(removeBtn);
+    item.appendChild(textarea);
+    list.appendChild(item);
   });
 }
 

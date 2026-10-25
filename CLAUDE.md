@@ -101,7 +101,6 @@ slots first; extract the abstraction once the shape is proven.
 
 ## Planned work (context, not instructions)
 Moving offline-only features into the UI, roughly cheapest first:
-- Live end-wrapper editing (cheap: uncached tail).
 - Live sampler editing; live cue editing.
 - `/remember`: add an entry to a retrieval pool and rebuild that pool's BM25 indices.
 - `/save`: on-demand checkpoint of session (and KV slot).

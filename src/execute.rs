@@ -20,7 +20,7 @@ pub fn dispatch(
     cmd: Command,
     conv: &mut Conversation,
     whispers: &mut WhisperStack,
-    wrappers: &mut [Wrapper],
+    wrappers: &mut Vec<Wrapper>,
 ) -> Effect {
     match cmd {
         Command::Delete { index } => execute_delete(conv, index),
@@ -33,6 +33,8 @@ pub fn dispatch(
         Command::Continue { text } => execute_continue(whispers, text),
         Command::Sync => execute_sync(),
         Command::EndWrapperEdit { index, text } => execute_end_wrapper_edit(wrappers, index, text),
+        Command::EndWrapperAdd { index, text } => execute_end_wrapper_add(wrappers, index, text),
+        Command::EndWrapperRemove { index } => execute_end_wrapper_remove(wrappers, index),
     }
 }
 
@@ -155,6 +157,53 @@ fn execute_end_wrapper_edit(wrappers: &mut [Wrapper], index: usize, text: String
         Some(wrapper) => {
             debug!("[wrapper end edit {index}] {text}");
             wrapper.content = text;
+            Effect::Sync
+        }
+        None => Effect::Error(format!("No end wrapper at index {index}")),
+    }
+}
+
+/// Positions in `wrappers` that hold end wrappers, in order.
+fn end_slots(wrappers: &[Wrapper]) -> Vec<usize> {
+    wrappers
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| matches!(w.position, Position::End))
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// Inserts before the `index`-th end wrapper; `index == count` appends after
+/// the last one (or at the end of the list if there are none).
+fn execute_end_wrapper_add(wrappers: &mut Vec<Wrapper>, index: usize, text: String) -> Effect {
+    let slots = end_slots(wrappers);
+    if index > slots.len() {
+        return Effect::Error(format!(
+            "Can't add an end wrapper at index {index}: there are {}",
+            slots.len()
+        ));
+    }
+    let slot = match slots.get(index) {
+        Some(&slot) => slot,
+        None => slots.last().map_or(wrappers.len(), |&last| last + 1),
+    };
+    debug!("[wrapper end add {index}] {text}");
+    wrappers.insert(
+        slot,
+        Wrapper {
+            position: Position::End,
+            content: text,
+            in_summarize: false,
+        },
+    );
+    Effect::Sync
+}
+
+fn execute_end_wrapper_remove(wrappers: &mut Vec<Wrapper>, index: usize) -> Effect {
+    match end_slots(wrappers).get(index) {
+        Some(&slot) => {
+            let removed = wrappers.remove(slot);
+            debug!("[wrapper end remove {index}] {}", removed.content);
             Effect::Sync
         }
         None => Effect::Error(format!("No end wrapper at index {index}")),
@@ -380,7 +429,7 @@ mod tests {
             Command::Delete { index: Some(0) },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
@@ -391,7 +440,7 @@ mod tests {
             Command::Retry { text: None },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert_eq!(conv.messages().len(), 0);
         match effect {
@@ -415,7 +464,7 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert_eq!(whispers.active().len(), 1);
@@ -424,7 +473,7 @@ mod tests {
             Command::Cancel { index: 0 },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert!(matches!(effect, Effect::WhispersChanged));
         assert!(whispers.active().is_empty());
@@ -441,7 +490,7 @@ mod tests {
             },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert_eq!(conv.messages().len(), 1);
@@ -451,7 +500,7 @@ mod tests {
             Command::Delete { index: Some(0) },
             &mut conv,
             &mut whispers,
-            &mut [],
+            &mut Vec::new(),
         );
         assert!(matches!(effect, Effect::Sync));
         assert!(conv.messages().is_empty());
@@ -562,5 +611,130 @@ mod tests {
         assert_eq!(wrappers[1].content, "Two paragraphs.");
         assert_eq!(conv.messages().len(), 1);
         assert_eq!(whispers.active().len(), 1);
+    }
+
+    // --- execute_end_wrapper_add ---
+
+    fn contents(wrappers: &[Wrapper]) -> Vec<&str> {
+        wrappers.iter().map(|w| w.content.as_str()).collect()
+    }
+
+    #[test]
+    fn end_wrapper_add_inserts_before_nth_end_wrapper() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_add(&mut wrappers, 1, "new".into());
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(
+            contents(&wrappers),
+            ["start a", "end a", "start b", "new", "end b"]
+        );
+    }
+
+    #[test]
+    fn end_wrapper_add_at_zero_goes_before_first_end_wrapper() {
+        let mut wrappers = mixed_wrappers();
+        execute_end_wrapper_add(&mut wrappers, 0, "new".into());
+        assert_eq!(
+            contents(&wrappers),
+            ["start a", "new", "end a", "start b", "end b"]
+        );
+    }
+
+    #[test]
+    fn end_wrapper_add_at_count_appends_after_last_end_wrapper() {
+        let mut wrappers = mixed_wrappers();
+        wrappers.push(wrapper(Position::Start, "start c", false));
+        let effect = execute_end_wrapper_add(&mut wrappers, 2, "new".into());
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(
+            contents(&wrappers),
+            ["start a", "end a", "start b", "end b", "new", "start c"]
+        );
+    }
+
+    #[test]
+    fn end_wrapper_add_with_no_end_wrappers_appends() {
+        let mut wrappers = vec![wrapper(Position::Start, "persona", false)];
+        let effect = execute_end_wrapper_add(&mut wrappers, 0, "new".into());
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(contents(&wrappers), ["persona", "new"]);
+    }
+
+    #[test]
+    fn end_wrapper_add_is_end_and_not_in_summarize() {
+        let mut wrappers = Vec::new();
+        execute_end_wrapper_add(&mut wrappers, 0, "new".into());
+        assert_eq!(wrappers.len(), 1);
+        assert!(matches!(wrappers[0].position, Position::End));
+        assert!(!wrappers[0].in_summarize);
+    }
+
+    #[test]
+    fn end_wrapper_add_past_count_is_error_and_unchanged() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_add(&mut wrappers, 3, "new".into());
+        assert!(matches!(effect, Effect::Error(_)));
+        assert_eq!(contents(&wrappers), contents(&mixed_wrappers()));
+    }
+
+    // --- execute_end_wrapper_remove ---
+
+    #[test]
+    fn end_wrapper_remove_counts_end_wrappers_only() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_remove(&mut wrappers, 1);
+        assert!(matches!(effect, Effect::Sync));
+        assert_eq!(contents(&wrappers), ["start a", "end a", "start b"]);
+    }
+
+    #[test]
+    fn end_wrapper_remove_all_leaves_start_wrappers() {
+        let mut wrappers = mixed_wrappers();
+        execute_end_wrapper_remove(&mut wrappers, 0);
+        execute_end_wrapper_remove(&mut wrappers, 0);
+        assert_eq!(contents(&wrappers), ["start a", "start b"]);
+        let effect = execute_end_wrapper_remove(&mut wrappers, 0);
+        assert!(matches!(effect, Effect::Error(_)));
+        assert_eq!(contents(&wrappers), ["start a", "start b"]);
+    }
+
+    #[test]
+    fn end_wrapper_remove_out_of_bounds_is_error_and_unchanged() {
+        let mut wrappers = mixed_wrappers();
+        let effect = execute_end_wrapper_remove(&mut wrappers, 2);
+        assert!(matches!(effect, Effect::Error(_)));
+        assert_eq!(contents(&wrappers), contents(&mixed_wrappers()));
+    }
+
+    #[test]
+    fn dispatch_end_wrapper_add_edit_remove() {
+        let mut conv = Conversation::new();
+        let mut whispers = WhisperStack::default();
+        let mut wrappers = mixed_wrappers();
+
+        let mut run = |cmd| dispatch(cmd, &mut conv, &mut whispers, &mut wrappers);
+        assert!(matches!(
+            run(Command::EndWrapperAdd {
+                index: 2,
+                text: "third".into()
+            }),
+            Effect::Sync
+        ));
+        assert!(matches!(
+            run(Command::EndWrapperEdit {
+                index: 2,
+                text: "third, edited".into()
+            }),
+            Effect::Sync
+        ));
+        assert!(matches!(
+            run(Command::EndWrapperRemove { index: 0 }),
+            Effect::Sync
+        ));
+
+        assert_eq!(
+            contents(&wrappers),
+            ["start a", "start b", "end b", "third, edited"]
+        );
     }
 }
